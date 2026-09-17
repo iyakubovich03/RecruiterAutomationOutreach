@@ -1,0 +1,22 @@
+{
+  "$comment": "Edit this file to point the app at your own job search. See README.md → 'Make it yours'. Regex fields are JavaScript regular expressions (case-insensitive) written as JSON strings, so escape backslashes: \"new.?grad\", \"recruit\\\\w*\".",
+  "workspace": {
+    "label": "Your job search",
+    "focus": "New-grad software engineering"
+  },
+  "search": {
+    "roleKeyword": "recruiter",
+    "audience": "University, early-career, and technical recruiters.",
+    "exampleCompanies": ["Stripe", "Microsoft", "Datadog"]
+  },
+  "recruiterTerms": ["recruit\\w*", "talent acquisition", "early careers", "campus hiring", "university relations"],
+  "focusTiers": [
+    { "label": "Early careers", "any": ["university", "campus", "early.?career", "new.?grad", "graduate recruit"] },
+    { "label": "Technical recruiting", "any": ["technical", "engineering", "software"], "also": ["recruit", "talent"] }
+  ],
+  "fallbackFocus": "Review recruiting focus",
+  "template": {
+    "subject": "New-grad software engineering opportunities at {company}",
+    "message": "Hi {first_name},\n\nI’m interested in new-grad software engineering opportunities at {company}.\n\n[Add your graduation date, relevant experience, and a project or portfolio link.]\n\nAre you the right person to contact about early-career engineering roles?\n\nThank you,\n[Your name]"
+  }
+}
