@@ -4,91 +4,136 @@ Type a company name and the app finds its recruiters from LinkedIn search result
 
 Everything runs on your computer: your API keys, Gmail tokens, contacts, resume, and send history stay in ignored local files and never go into this repository. It ships tuned for a **new-grad software engineering** search, but the wording, ranking, and default email all live in one config file, so anyone can point it at their own kind of job search without touching the code.
 
-## Quick start
+## Setup (about 15 minutes)
 
-Requires **Node.js 22.19+** and npm. You will need two things from outside the repo: a search API key (free tier is fine) and a Google OAuth client so the app can send from your Gmail. Both are one-time setup.
+You need three things: **Node.js**, a **free search API key**, and a **Google sign-in for your Gmail**. Do the steps in order.
 
-```sh
-git clone <this repository>
-cd recruiterIdentifier
-npm install
-cp .env.example .env.local     # then fill it in, see below
-npm run dev                    # open http://localhost:3000
-```
+### Step 1. Install and run
 
-### 1. Search API key (required, about 2 minutes)
+1. Install Node.js 22 or newer from https://nodejs.org (pick the LTS download).
+2. Open a terminal and run:
 
-Recruiter discovery starts from a web search such as `site:linkedin.com/in/ "<company>" recruiter`. Public search pages block automated queries, so a key is required or every search returns nothing.
-
-- **Serper** (recommended, https://serper.dev): sign in, open **API Keys**, and put the key in `.env.local` as `SERPER_API_KEY`. Free starter credits, no card. One company search costs roughly three to four credits.
-- **SerpApi** (https://serpapi.com): 100 free searches a month. Put the key in `SERPAPI_KEY`.
-
-Only one is needed. The **Find recruiters** page shows a `NO SEARCH API KEY` pill until one is set.
-
-### 2. Google OAuth client for Gmail sending (required to send, about 10 minutes)
-
-The app sends from your Gmail using the official API. It asks only for `gmail.send` plus your email address, and it never reads your inbox. Each person needs their own OAuth client; do not share one.
-
-1. Go to https://console.cloud.google.com, create a project (any name), and enable the **Gmail API** under *APIs & Services → Library*.
-2. Under *APIs & Services → OAuth consent screen*, choose **External**, fill in the app name and your email, and add **yourself as a test user**. (Internal only works for Google Workspace accounts.)
-3. Under *Credentials → Create credentials → OAuth client ID*, choose **Web application** and add this exact Authorized redirect URI:
-
-   `http://localhost:3000/api/auth/callback`
-
-4. Copy the client ID and secret into `.env.local`:
-
-   ```env
-   GOOGLE_CLIENT_ID=your-oauth-client-id
-   GOOGLE_CLIENT_SECRET=your-oauth-client-secret
-   GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback
+   ```sh
+   git clone https://github.com/iyakubovich03/RecruiterAutomationOutreach.git
+   cd RecruiterAutomationOutreach
+   npm install
+   cp .env.example .env.local
+   npm run dev
    ```
 
-5. Start the app, open **Connections → Connect Gmail**, and approve the sending permission.
+3. Open http://localhost:3000 in your browser. The app loads, but searching and sending won't work until Steps 2 and 3 are done.
 
-The port is fixed at 3000 because the redirect URI has to match exactly.
+`.env.local` is your private settings file. It is never uploaded anywhere. You will paste two things into it below.
 
-### 3. Make it yours (optional, edit `search.config.json`)
+### Step 2. Get a free search key (2 minutes)
 
-Everything specific to one kind of job search lives in `search.config.json` at the repo root. Edit it and restart `npm run dev`.
+The app finds recruiters by running a Google search. That needs a key.
 
-| Key | What it controls | Default |
-| --- | --- | --- |
-| `workspace.label`, `workspace.focus` | The label under your avatar in the sidebar. | "Your job search" / "New-grad software engineering" |
-| `search.roleKeyword` | The word appended to the LinkedIn search: `site:linkedin.com/in/ "<company>" <roleKeyword>`. | `recruiter` |
-| `search.audience` | The one-line description on the search page. | "University, early-career, and technical recruiters." |
-| `search.exampleCompanies` | The "Try …" buttons next to the search box (up to 5). | Stripe, Microsoft, Datadog |
-| `recruiterTerms` | Regex fragments; a search result must contain at least one to count as a recruiter at all. | recruit\\w*, talent acquisition, early careers, campus hiring, university relations |
-| `focusTiers` | Ordered ranking tiers. A result matches a tier when any `any` term appears and, if `also` is given, at least one `also` term appears too. The first tier ranks highest. | Early careers, then Technical recruiting |
-| `fallbackFocus` | Label for recruiters that match no tier. | "Review recruiting focus" |
-| `template.subject`, `template.message` | The default email a new workspace starts with. Placeholders: `{first_name}`, `{full_name}`, `{company}`, `{email}`. | New-grad software engineering outreach |
+1. Go to https://serper.dev and sign up (free, no credit card).
+2. Click **API Keys** in the left menu and copy your key.
+3. Open `.env.local` in any text editor and paste it on this line:
 
-Regex fields are JavaScript regular expressions inside JSON strings, case-insensitive, so a backslash must be doubled (`"new.?grad"`, `"recruit\\w*"`). Invalid entries stop the app at startup with a message naming the field.
+   ```
+   SERPER_API_KEY=paste-your-key-here
+   ```
 
-Example: pointing the app at product-design internships.
+That's it for search. Each company you look up uses about 3 to 4 of your free credits.
+
+*Alternative:* https://serpapi.com also works (100 free searches a month). Paste that key on the `SERPAPI_KEY=` line instead.
+
+### Step 3. Let the app send from your Gmail (10 minutes)
+
+The app sends emails from your own Gmail address. Google requires you to create a "sign-in" for it once. You only ever grant permission to **send**; the app cannot read your inbox.
+
+1. Go to https://console.cloud.google.com and sign in with the Gmail account you want to send from.
+2. At the top, click the project dropdown → **New project**. Name it anything (for example `recruiter-outreach`) and click **Create**. Make sure it is selected.
+3. In the search bar at the top, type **Gmail API**, open it, and click **Enable**.
+4. In the left menu, go to **APIs & Services → OAuth consent screen**.
+   - Choose **External**, click Create.
+   - App name: anything. User support email and developer email: your Gmail.
+   - Click through Save and Continue until you reach **Test users**. Click **Add users** and add your own Gmail address. Save.
+5. In the left menu, go to **APIs & Services → Credentials → Create credentials → OAuth client ID**.
+   - Application type: **Web application**.
+   - Under **Authorized redirect URIs**, click Add URI and paste exactly:
+
+     ```
+     http://localhost:3000/api/auth/callback
+     ```
+
+   - Click Create. A box shows your **Client ID** and **Client secret**.
+6. Paste both into `.env.local`:
+
+   ```
+   GOOGLE_CLIENT_ID=paste-client-id-here
+   GOOGLE_CLIENT_SECRET=paste-client-secret-here
+   ```
+
+7. Restart the app (press Ctrl+C in the terminal, then `npm run dev` again).
+8. In the app, click **Connect Gmail** at the top right, choose your account, and approve. Google may show "This app isn't verified" because it's your own private app: click **Continue**.
+
+You're ready. Type a company, click **Find recruiters**, and review the results.
+
+### Step 4. Set up your own email and resume (in the app)
+
+Open the **Default email** tab in the app:
+
+- Write the email you want recruiters to receive. Use `{first_name}` and `{company}` and the app fills them in per recruiter.
+- Upload your resume. It is attached to every outreach email automatically.
+
+Both are saved only on your computer.
+
+### Step 5. Change what kind of job you're searching for (optional)
+
+Out of the box the app looks for **new-grad software engineering** recruiters. To change that, open the file `search.config.json` in the project folder with a text editor. It looks like this:
 
 ```json
 {
-  "workspace": { "label": "Your job search", "focus": "Product design internships" },
-  "search": { "roleKeyword": "design recruiter", "audience": "Design and early-career recruiters.", "exampleCompanies": ["Figma", "Airbnb", "Notion"] },
-  "recruiterTerms": ["recruit\\w*", "talent acquisition", "talent partner", "early careers", "university relations"],
+  "workspace": { "label": "Your job search", "focus": "New-grad software engineering" },
+  "search": {
+    "roleKeyword": "recruiter",
+    "audience": "University, early-career, and technical recruiters.",
+    "exampleCompanies": ["Stripe", "Microsoft", "Datadog"]
+  },
+  "recruiterTerms": ["recruit\\w*", "talent acquisition", "early careers", "campus hiring", "university relations"],
   "focusTiers": [
-    { "label": "Design recruiting", "any": ["design", "ux", "product"], "also": ["recruit", "talent"] },
-    { "label": "Early careers", "any": ["university", "campus", "early.?career", "intern"] }
+    { "label": "Early careers", "any": ["university", "campus", "early.?career", "new.?grad", "graduate recruit"] },
+    { "label": "Technical recruiting", "any": ["technical", "engineering", "software"], "also": ["recruit", "talent"] }
   ],
   "fallbackFocus": "Review recruiting focus",
-  "template": { "subject": "Product design internship at {company}", "message": "Hi {first_name},\n\n…" }
+  "template": { "subject": "...", "message": "..." }
 }
 ```
 
-The default template only seeds a brand-new workspace. After that, edit it in the app under **Default email**, where you also upload the resume that is attached to every recruiter batch.
+What each part does:
 
-### What is private and stays out of Git
+- **`workspace.focus`**: the label shown in the sidebar. Just text.
+- **`search.roleKeyword`**: the word added to the Google search. `recruiter` works for almost everyone. Use `"design recruiter"` or `"sales recruiter"` to narrow it.
+- **`search.audience`** and **`exampleCompanies`**: the description and the "Try …" buttons on the search page. Just text.
+- **`focusTiers`**: how results are ranked. The first tier is shown first. A result lands in a tier when its title contains any word from `any` (and, if `also` is present, at least one word from `also` too). Add your own tier at the top, for example `{ "label": "Design recruiting", "any": ["design", "ux", "product"], "also": ["recruit", "talent"] }`.
+- **`recruiterTerms`**: a result must contain one of these to count as a recruiter. Usually leave alone.
+- **`template`**: the starting email for a brand-new install. Once you've saved your own email in the app, this is no longer used.
 
-- `.env.local`: your API key and Google client credentials.
-- `.local-data/`: Gmail tokens, contacts, send history, the saved email template, your resume, and cached research pages.
-- Build output and tool caches (`dist/`, `.next/`, `.vinext/`, `.wrangler/`, `*.tsbuildinfo`).
+Words in `any`, `also`, and `recruiterTerms` are matched case-insensitively and can use regex. Write `\\` for a backslash inside the JSON. If you make a typo, the app tells you which field on startup.
 
-All of these are listed in `.gitignore` and denied by the development file server. `search.config.json` and `.env.example` are intentionally committed.
+Restart `npm run dev` after editing.
+
+### What stays on your computer
+
+These are listed in `.gitignore` and are never committed or shared:
+
+- `.env.local`: your search key and Google client ID and secret.
+- `.local-data/`: your Gmail connection, saved email, resume, contacts, and send history.
+
+## Troubleshooting
+
+- **"NO SEARCH API KEY" pill on the search page**: `.env.local` is missing the Serper or SerpApi key, or the app wasn't restarted after adding it.
+- **Google says "Access blocked" or "app has not completed verification"**: you skipped adding yourself as a **test user** in Step 3.4.
+- **Google says "redirect_uri_mismatch"**: the redirect URI in Step 3.5 must be exactly `http://localhost:3000/api/auth/callback`, and the app must be on port 3000.
+- **Search finds nobody**: open the **Requests** tab. It shows every request and why results were excluded.
+
+---
+
+The rest of this file describes how the app works in detail. You don't need it to get started.
 
 ## Search to batch outreach
 
