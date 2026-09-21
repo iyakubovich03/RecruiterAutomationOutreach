@@ -12,6 +12,7 @@
     "test": "node --test tests/config.test.mjs tests/local-api.test.mjs tests/profile.test.mjs tests/discovery.test.mjs tests/search.test.mjs tests/patterns.test.mjs tests/company-domain.test.mjs tests/extension.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "extension:icons": "node scripts/make-extension-icons.mjs",
+    "audit": "node scripts/audit-companies.mjs",
     "agent:install": "node scripts/install-launch-agent.mjs --load",
     "agent:remove": "node scripts/install-launch-agent.mjs --remove",
     "db:generate": "drizzle-kit generate",

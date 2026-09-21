@@ -193,6 +193,8 @@ export async function findRocketReach(domain, { read = publicPage, onEvent = () 
       sources.push({ source, status: report.patterns.length ? 'read' : 'no matching formats', examples: 0, detail });
       onEvent({ stage: 'RocketReach page', status: report.patterns.length ? 'ok' : 'empty', detail, source });
       for (const context of report.unsupported) onEvent({ stage: 'RocketReach format', status: 'rejected', detail: `Unsupported format: ${context}`, source });
+      // The first page that reports formats is the company's own; reading the rest only spends RocketReach's rate limit (429 after ~a dozen reads).
+      if (report.patterns.length) break;
     } catch (error) {
       sources.push({ source, status: 'unavailable', examples: 0, detail: error.message });
       onEvent({ stage: 'RocketReach page', status: 'error', detail: error.message, source });
