@@ -29,6 +29,8 @@ const scrapers = {
   google: { label: 'Google public search', url: query => 'https://www.google.com/search?q=' + encodeURIComponent(query), check: html => { if (/\/httpservice\/retry\/enablejs/.test(html)) throw new Error('Google returned a JavaScript-required page instead of search results.'); } },
 };
 
+// Google via a search API can take 20 s+ under load; a short limit made whole searches fail on a slow day.
+const API_TIMEOUT_MS = 40000;
 // Keyed APIs honor site: operators and are not bot-walled; public HTML search
 // pages have stopped returning LinkedIn profiles, so they are fallbacks only.
 export function apiProviders(env = {}) {
@@ -38,7 +40,7 @@ export function apiProviders(env = {}) {
     source: query => 'https://www.googleapis.com/customsearch/v1?q=' + encodeURIComponent(query),
     async search(query, fetcher) {
       const params = new URLSearchParams({ key: env.GOOGLE_CSE_KEY, cx: env.GOOGLE_CSE_ID, q: query, num: '10' });
-      const response = await fetcher('https://www.googleapis.com/customsearch/v1?' + params, { signal: AbortSignal.timeout(15000) });
+      const response = await fetcher('https://www.googleapis.com/customsearch/v1?' + params, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`Google Custom Search API error (${response.status}): ${data.error?.message || 'no details'}`);
       return (data.items || []).map(item => ({ url: unwrapUrl(item.link), title: compact(item.title), snippet: compact(item.snippet) }));
@@ -48,7 +50,7 @@ export function apiProviders(env = {}) {
     name: 'serper', label: 'Serper Google API',
     source: query => 'https://google.serper.dev/search?q=' + encodeURIComponent(query),
     async search(query, fetcher) {
-      const response = await fetcher('https://google.serper.dev/search', { method: 'POST', headers: { 'X-API-KEY': env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, num: 10 }), signal: AbortSignal.timeout(15000) });
+      const response = await fetcher('https://google.serper.dev/search', { method: 'POST', headers: { 'X-API-KEY': env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, num: 10 }), signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`Serper API error (${response.status}): ${data.message || 'no details'}`);
       return (data.organic || []).map(item => ({ url: unwrapUrl(item.link), title: compact(item.title), snippet: compact(item.snippet) }));
@@ -59,7 +61,7 @@ export function apiProviders(env = {}) {
     source: query => 'https://serpapi.com/search?engine=google&q=' + encodeURIComponent(query),
     async search(query, fetcher) {
       const params = new URLSearchParams({ engine: 'google', q: query, num: '10', output: 'json', api_key: env.SERPAPI_KEY });
-      const response = await fetcher('https://serpapi.com/search?' + params, { signal: AbortSignal.timeout(15000) });
+      const response = await fetcher('https://serpapi.com/search?' + params, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) throw new Error(`SerpApi error (${response.status}): ${data.error || 'no details'}`);
       return (data.organic_results || []).map(item => ({ url: unwrapUrl(item.link), title: compact(item.title), snippet: compact(item.snippet) }));
@@ -89,7 +91,10 @@ export async function searchWeb(query, { env = {}, fetcher = fetch, read = publi
       onEvent({ stage, status: rows.length ? 'ok' : 'empty', detail: `${provider.name}: ${rows.length} results${rows.length && !done ? '; none matched, trying the next source' : ''}`, source });
       if (done) return { rows, provider: provider.label, warnings, available };
     } catch (error) {
-      warnings.push(`${provider.label} was unavailable or blocked.`);
+      const timedOut = /aborted|timed? ?out/i.test(error.message);
+      warnings.push(apiProviders.names.has(provider.name)
+        ? (timedOut ? `${provider.label} did not answer within ${API_TIMEOUT_MS / 1000}s (tried twice). This is usually temporary: run the search again.` : `${provider.label} failed: ${error.message}`)
+        : `${provider.label} was unavailable or blocked.`);
       onEvent({ stage, status: 'error', detail: error.message, source });
     }
   }

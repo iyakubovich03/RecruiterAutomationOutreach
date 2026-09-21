@@ -1,6 +1,6 @@
 import { createPatternCache } from './pattern-cache.mjs';
 import { buildBatch, outreachBlocked, personalize } from './batch.mjs';
-import { discoverCompanyDomain, excludedHost } from './company-domain.mjs';
+import { discoverCompanyDomain, excludedHost, freemailHost } from './company-domain.mjs';
 import { findPatterns, rankCandidates } from './patterns.mjs';
 import { discoverRecruiters } from './discovery.mjs';
 import { findRocketReachCompany } from './rocketreach.mjs';
@@ -108,7 +108,8 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       const rocketDomain=async(settled='')=>{
         rocket=await rocketCompany(displayCompany,{env,onEvent:trace,employers:result.results.map(r=>r.association?.text||'').filter(Boolean)});
         if(!rocket?.domain)throw new Error('no RocketReach company page was found');
-        if(excludedHost.test(rocket.domain))throw new Error(`${rocket.domain} is not a company domain`);
+        // The search-result blocklist (google.com, linkedin.com, …) must not veto RocketReach's answer for the company itself: Google's page really says google.com.
+        if(freemailHost.test(rocket.domain))throw new Error(`${rocket.domain} is a personal email provider, not a company domain`);
         const records=await mailServers(rocket.domain).catch(()=>[]);
         if(!hasMail(records))throw new Error(`${rocket.domain} has no mail servers`);
         if(settled){trace({stage:'RocketReach company',status:'ok',detail:rocket.domain===settled?`RocketReach agrees on ${settled}.`:`RocketReach lists ${rocket.domain}, but ${settled} is already confirmed by delivery; the RocketReach page is used for its formats only.`,source:rocket.source});return null;}

@@ -546,3 +546,16 @@ test('Stop sending halts a run immediately, sends nothing more, and Resume conti
   run=(await h.call('run/resume',{runId:run.id})).body.run;assert.equal(run.status,'running');assert.equal(run.stoppedBy,null);
   run=(await h.call('run/tick',{})).body.run;assert.equal(run.verifiedFormat,'first');assert.deepEqual(sent,['jane@example.com','alex@example.com']);
 });
+test('RocketReach may name a domain on the search-result blocklist (Google → google.com) but never a personal email provider',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>{const u=String(url);
+    if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jim-joseph">Jim Joseph - Recruiter at Google | LinkedIn</a></div>');
+    return new Response('Blocked',{status:403});});
+  const rocketUrl='https://rocketreach.co/google-email-format_b1';
+  const patterns=async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[{format:'first',percentage:50,source:rocketUrl}],sources:[],warnings:[]});
+  const google=harness(undefined,{findRocketReachCompany:async()=>({domain:'google.com',source:rocketUrl,title:'Google Email Format | google.com Emails',mentions:1,urls:[rocketUrl]}),discoverCompanyDomain:async()=>assert.fail('RocketReach settled the domain'),findPatterns:patterns,resolveMx:async()=>[{exchange:'smtp.google.com'}]});
+  await google.call('status');const found=await google.call('discover',{company:'Google'});
+  assert.equal(found.body.domain,'google.com');assert.equal(found.body.domainResolution.status,'rocketreach');assert.equal(found.body.results[0].candidates[0].email,'jim@google.com');
+  const freemail=harness(undefined,{findRocketReachCompany:async()=>({domain:'gmail.com',source:rocketUrl,title:'x',mentions:1,urls:[rocketUrl]}),discoverCompanyDomain:async()=>({domain:'',status:'unresolved',sources:[],message:'none'}),findPatterns:patterns,resolveMx:async()=>[{exchange:'mx'}]});
+  await freemail.call('status');const rejected=await freemail.call('discover',{company:'Google'});
+  assert.equal(rejected.body.domain,'');assert.ok(rejected.body.diagnostics.events.some(e=>/gmail\.com is a personal email provider/.test(e.detail)));
+});
