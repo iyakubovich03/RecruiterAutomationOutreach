@@ -34,3 +34,16 @@
 .modal-backdrop{position:fixed;inset:0;background:#18282166;display:grid;place-items:center;padding:20px;z-index:20}.modal{background:#fff;border-radius:12px;max-width:760px;width:100%;max-height:90vh;overflow:auto;padding:28px;box-shadow:0 20px 60px #18282133}.modal h2{margin-top:10px}
 .recipient-list{margin:16px 0;padding:0;list-style:none}.recipient-list li{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line);font-size:12px;overflow-wrap:anywhere}.recipient-list li small{color:var(--muted)}.recipient-list li.skipped{opacity:.55}
 .template-layout{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:30px}@media(max-width:800px){.template-layout{grid-template-columns:1fr}}
+
+/* Brand: "Recruiter Outreach" needs a smaller face than the old two-word mark */
+.brand{font-size:17px;letter-spacing:-.6px;text-align:left}.brand-mark{font-size:20px;padding-bottom:0}@media(max-width:800px){.brand{font-size:17px}}
+.status.bounced{background:#fff1f0;color:#b42318}.hint.ok{color:#3f6b48}
+/* Outreach history grouped by company → person → attempts */
+.person-block{border-top:1px solid var(--line);padding:16px 0}.person-head{display:flex;align-items:center;gap:12px}.person-head>div{flex:1;min-width:0}.person-head strong{display:block;font-size:13px}.person-head small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.attempts{list-style:none;margin:10px 0 0 49px;padding:0}.attempts li{border-left:2px solid #e4e8e2;padding:4px 0 4px 14px;margin:0}.attempts li.bounced{border-left-color:#e0a59c}.attempts li.sent{border-left-color:#9fbf8f}.attempts summary{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:12px;flex-wrap:wrap}.attempt-no{color:#a3ad94;font-size:10px;width:14px}.attempt-to{overflow-wrap:anywhere}.attempts small{color:var(--muted);font-size:11px}.attempts h3{margin-top:12px;font-size:13px}.attempts pre{margin:10px 0}
+@media(max-width:800px){.attempts{margin-left:0}}
+
+/* Editable emails inside the review dialog */
+.history-item .field{display:block;margin:12px 0 0;font-size:12px;font-weight:500}.history-item .field input,.history-item .field textarea{display:block;width:100%;margin-top:6px;border:1px solid #dde3d8;border-radius:6px;background:#fdfefc;padding:10px 12px;font:inherit;line-height:1.5;color:var(--ink)}.history-item .field textarea{resize:vertical}.history-item .edit-row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}.history-item .edit-row .hint{flex:1;margin:0}.tag.warn{background:#fff4ef;color:#946246;border-color:#eed4c5}
+.format-table{margin:14px 0 4px;padding:12px 14px;background:#f8faf4;border:1px solid var(--line);border-radius:8px}.format-table-head{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}.format-table-head strong{font-size:12px}.format-table-head small{font-size:11px;color:var(--muted)}.format-table .email-list li{align-items:baseline}.format-table .email-list li small{color:var(--muted)}.format-table .email-list li.verified span:last-child{color:#3f7a4a;font-weight:600}.format-table .email-list li.bounced span:last-child{color:#a15a3a}
+.secondary.danger{color:#8f3a2a;border-color:#e2c2b8;background:#fff6f3}.secondary.danger:hover{background:#ffeee9}.primary.danger{background:#a3402c}.primary.danger:hover:not(:disabled){background:#8a3423}

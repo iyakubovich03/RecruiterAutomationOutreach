@@ -18,7 +18,8 @@ export async function publicPage(value, redirects=0) {
  const timer=setTimeout(()=>request.destroy(new Error('Page request timed out.')),8000);request.on('error',e=>{clearTimeout(timer);reject(e);});
  });
  if([301,302,303,307,308].includes(response.status)&&response.location){if(redirects>=2)throw new Error('Too many redirects.');return publicPage(new URL(response.location,url).href,redirects+1);}
- if(response.status!==200)throw new Error('Page unavailable ('+response.status+').');
+ // Cloudflare answers a flagged client with 403/429/503 and a "Just a moment" JavaScript challenge; name it rather than report a bare status.
+ if(response.status!==200)throw new Error(/just a moment|challenge-error-text|challenge-form|cf-chl|verify you are human|enable javascript and cookies/i.test(response.text)?'Blocked by the site’s bot check (Cloudflare challenge, HTTP '+response.status+').':'Page unavailable ('+response.status+').');
  if(!/text\/html|application\/(?:xhtml\+xml|rss\+xml|xml)|text\/xml/i.test(response.type))throw new Error('Only HTML pages and search feeds are supported; document skipped.');
  return response.text;
 }

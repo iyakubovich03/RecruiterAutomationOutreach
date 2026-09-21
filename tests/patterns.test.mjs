@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rankCandidates, findPatterns } from '../server/patterns.mjs';
 import { publicIPv4, publicPage } from '../server/public-page.mjs';
-import { parseRocketReach, findRocketReach, rocketreachUrl } from '../server/rocketreach.mjs';
+import { parseRocketReach, findRocketReach, rocketreachUrl, rocketReachDomain, findRocketReachCompany, rankRocketReachPages } from '../server/rocketreach.mjs';
 import { createPatternCache, patternExpiry } from '../server/pattern-cache.mjs';
 const rocketSource='https://rocketreach.co/example-email-format_ab12';
 
@@ -71,6 +71,20 @@ test('company-name search scrapes the returned suffix and rejects formats for un
  assert.match(decodeURIComponent(urls[0]),/rocketreach Apple email format/);
  assert.equal(urls.length,2);assert.equal(result.patterns.length,1);assert.equal(result.patterns[0].source,target);
 });
+test('RocketReach company pages state the email domain, which disambiguates same-name companies',async()=>{
+ const page='<title>Scale AI Email Format | scale.com Emails</title><table><tr><td>[first]</td><td>jane@scale.com</td><td>50%</td></tr><tr><td>[first][last]</td><td>janedoe@scale.com</td><td>30%</td></tr></table><p>support@rocketreach.co</p>';
+ const url='https://rocketreach.co/scale-ai-email-format_1';
+ assert.deepEqual(rocketReachDomain(page,url),{domain:'scale.com',source:url,title:'Scale AI Email Format | scale.com Emails',basis:'page title',mentions:2});
+ assert.equal(rocketReachDomain('<title>Just a moment...</title><p>Verify you are human</p>',url),null);
+ assert.equal(rocketReachDomain('<p>hello@example.org hello@example.org x@other.net</p>',url).domain,'example.org');
+ const reads=[];
+ const found=await findRocketReachCompany('Scale AI',{read:async u=>{reads.push(u);if(u.includes('duckduckgo'))return `<div class="result"><a class="result__a" href="${url}">Scale AI Email Format</a></div>`;if(u===url)return page;throw new Error('Blocked');}});
+ assert.equal(found.domain,'scale.com');assert.deepEqual(found.urls,[url]);
+ assert.equal(await findRocketReachCompany('Nobody Inc',{read:async()=>'<html></html>'}),null);
+ const searched=[];
+ const reused=await findRocketReach('scale.com',{company:'Scale AI',urls:[url],read:async u=>{searched.push(u);if(u===url)return page;throw new Error('must not search');}});
+ assert.deepEqual(searched,[url]);assert.equal(reused.patterns[0].format,'first');
+});
 test('the top-ranked RocketReach page wins when several pages report the same domain',async()=>{
  const first='https://rocketreach.co/apple-email-format_1', second='https://rocketreach.co/apple-robotics-email-format_2';
  const result=await findRocketReach('apple.com',{company:'Apple',read:async url=>{
@@ -127,4 +141,71 @@ test('concurrent company lookups share one research request',async()=>{
  const get=createPatternCache({},()=>{},async()=>{calls++;return new Promise(resolve=>{finish=resolve;});});
  const one=get('Apple','apple.com'),two=get('Apple','apple.com');finish(cachedReport());
  const result=await Promise.all([one,two]);assert.equal(calls,1);assert.deepEqual(result[0],result[1]);
+});
+
+test('the RocketReach page named on the recruiters’ profiles outranks the first search hit',async()=>{
+ const corp='https://rocketreach.co/mitsubishi-corporation-email-format_1', power='https://rocketreach.co/mitsubishi-power-americas-email-format_2', motors='https://rocketreach.co/mitsubishi-motors-north-america-inc-email-format_3';
+ const rows=[{url:corp,title:'Mitsubishi Corporation Email Format | mitsubishicorp.com Emails'},{url:'https://leadiq.com/c/mitsubishi/email-format',title:'Mitsubishi Email Format'},{url:power,title:'Mitsubishi Power Americas Email Format | mhps.com Emails'},{url:motors,title:'Mitsubishi Motors North America, Inc. Email Format'}];
+ const employers=['Senior Talent Acquisition Partner at Mitsubishi Power Americas','Recruiting @ Mitsubishi Power Americas · Experience: Mitsubishi Power Americas','Senior Talent Acquisition Business Partner at Mitsubishi Power Americas','Senior Manager Talent Acquisition at Mitsubishi Power Americas','Recruiting Specialist @ Mitsubishi ...','Recruiting Manager at Mitsubishi Electric Power Products, Inc.'];
+ const ranked=rankRocketReachPages(rows,'Mitsubishi',employers);
+ assert.deepEqual(ranked.map(p=>[p.url,p.employers]),[[power,4],[corp,2],[motors,0]]);
+ // Bare-name profiles fit every entity, so the exact-name page wins only when nothing more specific is named.
+ assert.equal(rankRocketReachPages(rows,'Mitsubishi',['Recruiter at Mitsubishi','Recruiter @ Mitsubishi'])[0].url,corp);
+ assert.equal(rankRocketReachPages(rows,'Mitsubishi',[])[0].url,corp);
+ const reads=[],events=[];
+ const found=await findRocketReachCompany('Mitsubishi',{employers,onEvent:e=>events.push(e),read:async u=>{reads.push(u);if(u.includes('duckduckgo'))return rows.map(r=>`<div class="result"><a class="result__a" href="${r.url}">${r.title}</a></div>`).join('');if(u===power)return '<title>Mitsubishi Power Americas Email Format | mhps.com Emails</title><p>jane@mhps.com</p>';throw new Error('wrong page');}});
+ assert.equal(found.domain,'mhps.com');assert.deepEqual(found.urls,[power,corp,motors]);assert.deepEqual(found.pages[0],{url:power,title:rows[2].title});
+ // The search result title already states the domain, so a blocked or rate-limited RocketReach page cannot lose it.
+ assert.equal(reads.filter(u=>u.includes('rocketreach.co')).length,0);
+ assert.ok(events.some(e=>e.stage==='RocketReach company'&&/Chose “Mitsubishi Power Americas” \(named on 4 of 6 recruiter profiles\)/.test(e.detail)));
+ assert.ok(events.some(e=>e.stage==='RocketReach company'&&/mhps\.com for Mitsubishi.*page not requested/.test(e.detail)));
+});
+test('format pages naming the wanted domain are read first, and a timed-out page is retried once',async()=>{
+ const josef='https://rocketreach.co/josef-gartner-gmbh-email-format_1', gartner='https://rocketreach.co/gartner-email-format_2';
+ const reads=[],events=[];let attempts=0;
+ const result=await findRocketReach('gartner.com',{company:'Gartner',onEvent:e=>events.push(e),read:async url=>{
+ if(url.includes('duckduckgo.com'))return `<div class="result"><a class="result__a" href="${josef}">Josef Gartner GmbH Email Format | josef-gartner.de Emails</a></div><div class="result"><a class="result__a" href="${gartner}">Gartner Email Format | gartner.com Emails</a></div>`;
+ reads.push(url);
+ if(url===gartner&&++attempts===1)throw new Error('Page request timed out.');
+ return url===gartner?'<table><tr><td>[first].[last]</td><td>jane.doe@gartner.com</td><td>87%</td></tr></table>':'<title>Josef Gartner GmbH Email Format | josef-gartner.de Emails</title><p>x@josef-gartner.de</p>';
+ }});
+ assert.deepEqual(reads,[gartner,gartner]);assert.equal(result.patterns[0].format,'first.last');
+ assert.ok(events.some(e=>e.stage==='RocketReach page'&&e.status==='partial'&&/Retrying once/.test(e.detail)));
+ assert.ok(events.some(e=>e.stage==='RocketReach page'&&/Skipped without a request: this page is for josef-gartner\.de/.test(e.detail)));
+ reads.length=0;
+ const reused=await findRocketReach('gartner.com',{company:'Gartner',urls:[{url:josef,title:'Josef Gartner GmbH Email Format | josef-gartner.de Emails'},{url:gartner,title:'Gartner Email Format | gartner.com Emails'}],read:async url=>{reads.push(url);return '<table><tr><td>[first].[last]</td><td>jane.doe@gartner.com</td></tr></table>';}});
+ assert.deepEqual(reads,[gartner]);assert.equal(reused.sources.length,1);
+ const limited=await findRocketReach('gartner.com',{company:'Gartner',urls:[gartner],read:async()=>{throw new Error('Page unavailable (429).');}});
+ assert.equal(limited.sources[0].status,'unavailable');assert.match(limited.warnings[0],/Page unavailable \(429\).*bot protection is challenging/);
+});
+test('a fresh search retries format research during the one-hour hold but keeps unexpired saved formats',async()=>{
+ let calls=0,time=Date.parse('2026-01-01T00:00:00Z');const reports={};
+ const get=createPatternCache(reports,()=>{},async()=>{calls++;return calls<3?{reportedPatterns:[],sources:[],warnings:[]}:cachedReport();},()=>time);
+ await get('Example','one.example');await get('Example','one.example');assert.equal(calls,1);
+ await get('Example','one.example',()=>{},{force:true});assert.equal(calls,2);
+ await get('Example','one.example',()=>{},{force:true});assert.equal(calls,3);assert.equal(reports['one.example'].reportedPatterns.length,1);
+ await get('Example','one.example',()=>{},{force:true});assert.equal(calls,3);
+});
+
+// Mirrors the real page structure saved from rocketreach.co/gartner-email-format on 2026-09-17.
+const gartnerPage=(withTitle=true,withMeta=true,withTable=true)=>`<html><head>${withTitle?'<title>Gartner Email Format | gartner.com Emails</title>':'<title>Gartner Email Format</title>'}${withMeta?`<meta name="description" content="Gartner uses 13 email formats: 1. first '.' last@gartner.com (87.3%). Enter a name to find &amp; verify an email >>>">`:''}</head><body><nav>Log In Sign Up</nav><h1>Gartner Email Format</h1><p>Get Verified Emails for 22,044 Gartner Employees</p>${withTable?'<p>The most common Gartner email format is [first].[last] (ex. jane.doe@gartner.com), which is being used by 87.3% of Gartner work email addresses.</p><table><tr><th>Email Format</th><th>Example</th><th>Percentage</th></tr><tr><td>[first].[last]</td><td>jane.doe@gartner.com</td><td>87.3%</td></tr><tr><td>[first][last]</td><td>janedoe@gartner.com</td><td>3.9%</td></tr><tr><td>[last][first_initial]</td><td>doej@gartner.com</td><td>2.6%</td></tr></table>':''}<footer>support@rocketreach.co</footer></body></html>`;
+test('the domain is read from the title, then the meta description, then the format table, never from RocketReach’s own addresses',()=>{
+ const url='https://rocketreach.co/gartner-email-format_b5c611ccf42e0c4f';
+ assert.deepEqual(rocketReachDomain(gartnerPage(),url),{domain:'gartner.com',source:url,title:'Gartner Email Format | gartner.com Emails',basis:'page title',mentions:4});
+ assert.equal(rocketReachDomain(gartnerPage(false),url).basis,'meta description');
+ assert.equal(rocketReachDomain(gartnerPage(false,false),url).basis,'format table examples');
+ assert.equal(rocketReachDomain(gartnerPage(false,false,false),url),null);
+ const report=parseRocketReach(gartnerPage(),'gartner.com',url);
+ assert.deepEqual(report.patterns.map(p=>[p.format,p.percentage]),[['first.last',87.3],['firstlast',3.9],['lastf',2.6]]);
+ assert.equal(parseRocketReach(gartnerPage(),'josef-gartner.de',url).patterns.length,0);
+});
+test('the RocketReach company search asks the API for site:rocketreach.co first, since a plain query can return only videos about RocketReach',async()=>{
+ const queries=[];const page='https://rocketreach.co/figma-email-format_b5f1aa14f6b3a5a6';
+ const fetcher=async url=>{const q=decodeURIComponent(new URL(String(url)).searchParams.get('q')||'');queries.push(q);
+  return Response.json({organic_results:q.startsWith('site:rocketreach.co')?[{link:page,title:'Figma Email Format'}]:[{link:'https://www.youtube.com/watch?v=1',title:'How To Use RocketReach'}]});};
+ const found=await findRocketReachCompany('Figma',{env:{SERPAPI_KEY:'k'},fetcher,read:async u=>{if(u===page)return '<title>Figma Email Format | figma.com Emails</title><p>jane@figma.com</p>';throw new Error('must not scrape '+u);}});
+ assert.equal(found.domain,'figma.com');assert.deepEqual(queries,['site:rocketreach.co Figma email format']);
+ // Without a search API the site: form is skipped (public search pages drop site:) and the plain query is scraped as before.
+ const reads=[];const scraped=await findRocketReachCompany('Figma',{read:async u=>{reads.push(u);if(u.includes('duckduckgo'))return `<div class="result"><a class="result__a" href="${page}">Figma Email Format</a></div>`;if(u===page)return '<title>Figma Email Format | figma.com Emails</title>';throw new Error('x');}});
+ assert.equal(scraped.domain,'figma.com');assert.match(decodeURIComponent(reads[0]),/rocketreach Figma email format/);
 });

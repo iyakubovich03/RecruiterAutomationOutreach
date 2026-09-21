@@ -55,13 +55,14 @@ export function htmlBody(message) {
   const paragraphs = message.replace(/\r\n/g, '\n').trim().split(/\n{2,}/).map(p => '<p style="margin:0 0 1em">' + linkify(p).replace(/\n/g, '<br>') + '</p>').join('');
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#202124">${paragraphs}</div>`;
 }
-export function mimeMessage({ to, from, subject, message, attachment = null }) {
+export function mimeMessage({ to, from, subject, message, attachment = null, messageId = '' }) {
   if (!emailPattern.test(to) || !emailPattern.test(from)) throw new Error('A valid sender and recipient email are required.');
   if (!subject?.trim() || /[\r\n]/.test(subject) || subject.length > 200) throw new Error('Use a subject of 1–200 characters without line breaks.');
   if (!message?.trim() || message.length > 20000) throw new Error('Use a message of 1–20,000 characters.');
   if (/\{[a-z_]+\}/i.test(subject + message)) throw new Error('Replace all message placeholders before sending.');
   const wrap = base64 => base64.match(/.{1,76}/g).join('\r\n');
-  const headers = ['From: ' + from, 'To: ' + to, 'Subject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=', 'MIME-Version: 1.0'];
+  // A known Message-ID lets a later bounce notice (In-Reply-To) be matched back to this email.
+  const headers = ['From: ' + from, 'To: ' + to, 'Subject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=', ...(messageId ? ['Message-ID: <' + String(messageId).replace(/[<>\r\n\s]/g, '') + '>'] : []), 'MIME-Version: 1.0'];
   const alt = 'alt_' + randomBytes(12).toString('hex');
   const body = [`Content-Type: multipart/alternative; boundary="${alt}"`, '', `--${alt}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', wrap(Buffer.from(message).toString('base64')), `--${alt}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', wrap(Buffer.from(htmlBody(message)).toString('base64')), `--${alt}--`];
   let content;

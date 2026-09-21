@@ -66,6 +66,16 @@ test('a configured search API key is used before public search pages and never l
  assert.equal(called.length,1);assert.match(called[0],/key=secret-key/);assert.equal(result.provider,'Google Custom Search API');assert.equal(result.results[0].name,'Jane Smith');assert.equal(result.results[0].candidates[0].email,'jane.smith@example.com');
  assert.ok(events.every(e=>!String(e.source||'').includes('secret-key')&&!String(e.detail||'').includes('secret-key')));
 });
+test('company matching ignores spacing and the search retries unquoted when the exact phrase finds nobody',async()=>{
+ assert.equal(rankProfile({headline:'Jane Smith - Technical Recruiter at Scale AI',snippet:''},'Scaleai').company,'Scaleai');
+ assert.ok(rankProfile({headline:'Jane Smith - Recruiter @ ScaleAI',snippet:''},'Scale AI'));
+ assert.equal(rankProfile({headline:'Jane Smith - Recruiter at Scale',snippet:''},'Scale AI'),null);
+ const queries=[];
+ const result=await discoverRecruiters('Scaleai','',async url=>{const q=decodeURIComponent(String(url));queries.push(q);if(!q.includes('duckduckgo'))return new Response('Blocked',{status:403});return new Response(q.includes('"Scaleai"')?'<div class="result"></div>':'<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>');});
+ assert.equal(result.results.length,1);assert.equal(result.results[0].name,'Jane Smith');
+ assert.equal(result.results[0].observedCompany,'Scale AI');assert.equal(result.canonicalCompany,'Scale AI');assert.equal(result.company,'Scaleai');
+ assert.equal(queries.filter(q=>q.includes('duckduckgo')).length,2);assert.match(queries.at(-1),/in\/ Scaleai recruiter/);
+});
 test('company names containing regular expression characters match literally',()=>{
  assert.ok(rankProfile({headline:'Jane Smith - Recruiter at Example (US)',snippet:''},'Example (US)'));
  assert.equal(rankProfile({headline:'Jane Smith - Recruiter at Example US',snippet:''},'Example (US)'),null);

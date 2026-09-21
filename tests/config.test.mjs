@@ -40,7 +40,7 @@ test('a custom config changes the search query, filters, ranking, and template',
   assert.equal(rankProfile({ source: 'https://www.linkedin.com/in/jane', headline: 'Jane Smith - Early Careers at Example', snippet: '' }, 'Example', config), null, 'terms outside recruiterTerms no longer count as recruiters');
   const queries = [];
   await discoverRecruiters('Example', '', async (url, opts) => { queries.push(JSON.parse(opts.body).q); return Response.json({ organic: [] }); }, () => {}, { env: { SERPER_API_KEY: 's' }, config }).catch(() => {});
-  assert.deepEqual(queries, ['site:linkedin.com/in/ "Example" sales recruiter']);
+  assert.deepEqual(queries, ['site:linkedin.com/in/ "Example" sales recruiter', 'site:linkedin.com/in/ Example sales recruiter']);
   assert.deepEqual(publicConfig(config), { workspace: config.workspace, search: config.search, focusLabels: ['Sales hiring', 'Other recruiting'] });
   assert.equal(JSON.stringify(publicConfig(config)).includes('Pattern'), false);
 });

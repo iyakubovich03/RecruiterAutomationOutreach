@@ -6,6 +6,7 @@ import { publicPage } from './public-page.mjs';
 import { parseSearchHtml, searchWeb } from './search.mjs';
 
 const normalize = value => String(value || '').toLowerCase().replace(/\b(incorporated|inc|corporation|corp|limited|ltd|llc)\b/g,'').replace(/[^\p{L}\p{N}]/gu,'');
+export const excludedHost = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|jobvite\.com|taleo\.net|successfactors\.com|bamboohr\.com|breezy\.hr|workable\.com|wellfound\.com|ziprecruiter\.com|monster\.com|dice\.com|builtin\.com|simplify\.jobs|google\.com|gstatic\.com|googleapis\.com|cloudflare\.com|w3\.org|apps\.apple\.com|play\.google\.com|linkedin\.com|facebook\.com|instagram\.com|wikipedia\.org|crunchbase\.com|zoominfo\.com|rocketreach\.co|indeed\.com|glassdoor\.com|youtube\.com|x\.com|twitter\.com|duckduckgo\.com|bing\.com|gmail\.com|outlook\.com|yahoo\.com)$/i;
 const excluded = /(^|\.)(linkedin\.com|facebook\.com|instagram\.com|wikipedia\.org|crunchbase\.com|zoominfo\.com|rocketreach\.co|indeed\.com|glassdoor\.com|youtube\.com|x\.com|twitter\.com|duckduckgo\.com|bing\.com|gmail\.com|outlook\.com|yahoo\.com)$/i;
 function companyRows(rows) {
  const seen=new Set();

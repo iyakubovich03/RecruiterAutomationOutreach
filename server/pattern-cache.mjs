@@ -17,11 +17,13 @@ export function patternExpiry(checkedAt) {
 // companies with the same display name and different domains stay separate.
 export function createPatternCache(reports, save, research, now = Date.now) {
   const jobs = new Map();
-  return async function getPatterns(company, value, onEvent = () => {}) {
+  // `force` (a "Run fresh search") skips the one-hour hold after a failed attempt; saved formats are still reused until they expire.
+  return async function getPatterns(company, value, onEvent = () => {}, { force = false, ...extra } = {}) {
     const domain = domainOf(value), previous = reports[domain], time = now();
     const expires = supported(previous) ? patternExpiry(previous.checkedAt) : 0;
     const retryAt = Date.parse(previous?.retryAfter || '');
-    if (expires > time || retryAt > time) {
+    if (retryAt > time && force && expires <= time) onEvent({ stage: 'Email pattern cache', status: 'running', detail: `Fresh search requested; retrying format research before the hold ends (${previous.retryAfter}).` });
+    if (expires > time || (retryAt > time && !force)) {
       const stale = supported(previous) && expires <= time;
       onEvent({ stage: 'Email pattern cache', status: stale ? 'partial' : 'cached', detail: expires > time
         ? `Using saved formats for ${company || domain}; collected ${previous.checkedAt}, refresh due ${new Date(expires).toISOString()}. No format sources requested.`
@@ -35,7 +37,7 @@ export function createPatternCache(reports, save, research, now = Date.now) {
     const job = (async () => {
       onEvent({ stage: 'Email pattern cache', status: 'running', detail: previous ? 'Saved formats expired; refreshing company research.' : 'No saved formats; searching for the company’s RocketReach page.' });
       let fresh, failure;
-      try { fresh = await research(domain, undefined, { company, onEvent }); }
+      try { fresh = await research(domain, undefined, { company, onEvent, ...extra }); }
       catch (error) { failure = error.message; onEvent({ stage: 'Email patterns', status: 'error', detail: failure }); }
       const checkedAt = new Date(now()).toISOString();
       let report;

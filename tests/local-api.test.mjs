@@ -9,7 +9,7 @@ const part=(raw,type)=>{const m=raw.match(new RegExp('Content-Type: '+type.repla
 import { createLocalApi, CALLBACK } from '../server/local-api.mjs';
 import { buildBatch } from '../server/batch.mjs';
 import { automaticRecipients } from '../app/outreach.mjs';
-function harness(seed, services = { findPatterns: async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}) }) {
+function harness(seed, services = { findPatterns: async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}), findRocketReachCompany: async()=>null }) {
   const dir=mkdtempSync(join(tmpdir(),'recruiter-test-'));
   if(seed)writeFileSync(join(dir,'workspace.json'),JSON.stringify(seed));
   const api=createLocalApi(()=>({GOOGLE_CLIENT_ID:'dummy',GOOGLE_CLIENT_SECRET:'dummy'}),dir,services);
@@ -152,6 +152,196 @@ test('test sends personalize the editor text for any address and are flagged as 
   const status=await h.call('status');assert.equal(status.body.history.length,2);assert.ok(status.body.history.every(r=>r.test===true&&r.contactId===null));
   const offline=seed();offline.tokens=null;const unconnected=harness(offline);await unconnected.call('status');assert.equal((await unconnected.call('test-send',body)).status,401);
 });
+test('extension token gates the extension API both ways',async()=>{
+  const h=harness(batchSeed());const status=await h.call('status');const token=status.body.extensionToken;
+  assert.match(token,/^[a-f0-9]{64}$/);assert.match(status.body.extensionPath,/extension$/);
+  assert.equal((await h.call('extension/status')).status,403);
+  assert.equal((await h.call('extension/status',undefined,{'x-extension-token':'wrong'})).status,403);
+  assert.equal((await h.call('status',undefined,{'x-extension-token':token})).status,403);
+  const ok=await h.call('extension/status',undefined,{'x-extension-token':token});
+  assert.equal(ok.status,200);assert.equal(ok.body.connected,true);assert.equal(ok.body.template,false);assert.equal(ok.body.resume,null);
+  assert.equal(JSON.stringify(ok.body).includes(token),false);
+});
+test('extension preview runs the pipeline, always attaches the resume, and sends only on confirmation',async t=>{
+  const messages=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a><div class="result__snippet">Recruiter at Example</div></div>');if(u.includes('gmail.googleapis.com')){messages.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString());return Response.json({id:'gmail-'+messages.length});}return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}, my resume is attached.'};data.resume={filename:'Resume.pdf',type:'application/pdf',size:15,savedAt:'2026-09-17T00:00:00.000Z'};
+  const h=harness(data,{discoverCompanyDomain:async()=>({domain:'example.com',status:'published',sources:[],message:'Published'}),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[{format:'flast',percentage:60,source:'https://rocketreach.co/example-email-format_1'}],sources:[],warnings:[]})});
+  writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7 resume');
+  const token=(await h.call('status')).body.extensionToken;const ext={'x-extension-token':token};
+  assert.equal((await h.call('extension/preview',{company:'X'},ext)).status,400);
+  const preview=await h.call('extension/preview',{company:'Example'},ext);
+  assert.equal(preview.status,200);assert.equal(preview.body.reason,'');
+  assert.equal(preview.body.discovery.results[0].name,'Jane Smith');assert.equal(preview.body.discovery.topFormat.format,'flast');
+  assert.deepEqual(preview.body.recipients,[{name:'Jane Smith',company:'Example',email:'jsmith@example.com',skipped:''}]);
+  assert.equal(preview.body.batch.attachment,'Resume.pdf');assert.equal(preview.body.batch.rows[0].message,'Hi Jane, my resume is attached.');assert.equal(preview.body.batch.owner,undefined);
+  assert.equal((await h.call('batch/send',{batchId:preview.body.batch.id,confirmed:true})).status,409);
+  assert.equal((await h.call('extension/send',{batchId:preview.body.batch.id},ext)).status,400);
+  const sent=await h.call('extension/send',{batchId:preview.body.batch.id,confirmed:true},ext);
+  assert.equal(sent.status,200,JSON.stringify(sent.body));assert.equal(sent.body.batch.status,'complete');assert.equal(messages.length,1);assert.match(messages[0],/multipart\/mixed/);assert.match(messages[0],/filename="Resume.pdf"/);
+  const again=await h.call('extension/preview',{company:'Example'},ext);
+  assert.equal(again.body.batch,null);assert.match(again.body.reason,/already contacted/);assert.equal(again.body.recipients[0].skipped,'Already contacted or pending');
+  const progress=await h.call('extension/progress',undefined,ext);assert.equal(progress.body.company,'Example');assert.equal(progress.body.running,false);
+  data.resume=null;const noResume=harness(data);const t2=(await noResume.call('status')).body.extensionToken;
+  assert.equal((await noResume.call('extension/preview',{company:'Example'},{'x-extension-token':t2})).status,409);
+});
+test('extension preview uses the application page domain when it has mail servers, and the profiles’ spelling of the company',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
+  const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}'};data.resume={filename:'r.pdf',type:'application/pdf',size:5,savedAt:'2026-09-17T00:00:00.000Z'};
+  const searched=[],patterned=[];
+  const h=harness(data,{discoverCompanyDomain:async company=>{searched.push(company);return {domain:'scale.com',status:'inferred',sources:[],message:'Searched'};},findPatterns:async(domain,read,options)=>{patterned.push([domain,options.company]);return {domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]};},resolveMx:async domain=>domain==='scale.com'?[{exchange:'mx.scale.com'}]:[]});
+  writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7');
+  const ext={'x-extension-token':(await h.call('status')).body.extensionToken};
+  const hinted=await h.call('extension/preview',{company:'Scaleai',siteHint:'careers.scale.com',pageUrl:'https://careers.scale.com/thanks'},ext);
+  assert.equal(hinted.status,200,JSON.stringify(hinted.body));assert.equal(hinted.body.discovery.domain,'scale.com');assert.match(hinted.body.discovery.domainMessage,/application page/);
+  assert.equal(hinted.body.discovery.company,'Scale AI');assert.deepEqual(searched,[]);assert.deepEqual(patterned,[['scale.com','Scale AI']]);
+  assert.equal(hinted.body.batch.rows[0].subject,'Roles at Scale AI');
+  const atsHint=await h.call('extension/preview',{company:'Scaleai',fresh:true,siteHint:'jobs.lever.co',pageUrl:'https://jobs.lever.co/scaleai/1/thanks'},ext);
+  assert.deepEqual(searched,['Scale AI']);assert.equal(atsHint.body.discovery.domain,'scale.com');
+  const noMail=await h.call('extension/preview',{company:'Scaleai',fresh:true,siteHint:'nomail.example'},ext);
+  assert.equal(noMail.status,200);assert.equal(searched.length,2);
+  assert.ok(atsHint.body.discovery.results.length>=1);
+});
+test('re-searching a company refreshes already-saved recruiters with the corrected company name, domain, and addresses',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
+  let domain='scaleai.ca';
+  const h=harness(undefined,{findRocketReachCompany:async()=>null,discoverCompanyDomain:async()=>({domain,status:'inferred',sources:[],message:'Searched'}),findPatterns:async d=>({domain:d,checkedAt:new Date().toISOString(),reportedPatterns:[{format:'first.last',percentage:90,source:'https://rocketreach.co/x-email-format_1'}],sources:[],warnings:[]})});
+  await h.call('status');
+  const first=await h.call('discover',{company:'Scaleai'});const saved=await h.call('discover/save',{sources:first.body.results.map(r=>r.source)});
+  assert.equal(saved.body.saved,1);const id=saved.body.contactIds[0];
+  let contact=(await h.call('status')).body.contacts[0];assert.equal(contact.domain,'scaleai.ca');assert.equal(contact.candidates[0].email,'jane.smith@scaleai.ca');
+  await h.call('contacts/select',{id,email:'jane.smith@scaleai.ca'});
+  domain='scale.ai';
+  const second=await h.call('discover',{company:'Scaleai',fresh:true});const again=await h.call('discover/save',{sources:second.body.results.map(r=>r.source)});
+  assert.deepEqual([again.body.saved,again.body.refreshed,again.body.contactIds],[0,1,[id]]);
+  contact=(await h.call('status')).body.contacts[0];
+  assert.equal(contact.company,'Scale AI');assert.equal(contact.domain,'scale.ai');assert.equal(contact.candidates[0].email,'jane.smith@scale.ai');assert.equal(contact.selected,null);
+  assert.equal((await h.call('status')).body.contacts.length,1);
+});
+test('typed searches take the domain RocketReach states before searching for an official website',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
+  const rocketUrl='https://rocketreach.co/scale-ai-email-format_1';const patterned=[];
+  const h=harness(undefined,{findRocketReachCompany:async company=>company==='Scale AI'?{domain:'scale.com',source:rocketUrl,title:'Scale AI Email Format | scale.com Emails',mentions:3,urls:[rocketUrl]}:null,discoverCompanyDomain:async()=>assert.fail('RocketReach settled the domain; no website search expected'),findPatterns:async(domain,read,options)=>{patterned.push([domain,options.company,options.rocketReachUrls]);return {domain,checkedAt:new Date().toISOString(),reportedPatterns:[{format:'first',percentage:50,source:rocketUrl}],sources:[],warnings:[]};},resolveMx:async domain=>domain==='scale.com'?[{exchange:'mx.scale.com'}]:[]});
+  await h.call('status');const result=await h.call('discover',{company:'Scaleai'});
+  assert.equal(result.status,200);assert.equal(result.body.company,'Scale AI');assert.equal(result.body.domain,'scale.com');assert.equal(result.body.domainResolution.status,'rocketreach');
+  assert.deepEqual(patterned,[['scale.com','Scale AI',[rocketUrl]]]);assert.equal(result.body.results[0].candidates[0].email,'jane@scale.com');
+  const nomail=harness(undefined,{findRocketReachCompany:async()=>({domain:'scaleai.ca',source:rocketUrl,title:'x',mentions:1,urls:[rocketUrl]}),discoverCompanyDomain:async()=>({domain:'scale.com',status:'inferred',sources:[],message:'Searched'}),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}),resolveMx:async()=>[]});
+  await nomail.call('status');const fallback=await nomail.call('discover',{company:'Scale AI'});assert.equal(fallback.body.domain,'scale.com');assert.equal(fallback.body.domainResolution.status,'inferred');
+});
+test('bounced addresses are detected from Gmail headers, never retried, and the next-best address is queued',async t=>{
+  const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);
+    if(u.endsWith('/messages/send')){const raw=Buffer.from(JSON.parse(opts.body).raw,'base64url').toString();sent.push({to:raw.match(/^To: (.+)$/m)[1],messageId:raw.match(/^Message-ID: <(.+)>$/m)[1]});return Response.json({id:'gmail-'+sent.length});}
+    if(u.endsWith('/profile'))return Response.json({historyId:'1000'});
+    if(u.includes('/history?'))return Response.json({history:[{messagesAdded:[{message:{id:'dsn-1'}}]},{messagesAdded:[{message:{id:'newsletter'}}]}]});
+    if(u.includes('/messages/dsn-1?'))return Response.json({internalDate:String(Date.now()),payload:{headers:[{name:'From',value:'Mail Delivery Subsystem <mailer-daemon@googlemail.com>'},{name:'Subject',value:'Delivery Status Notification (Failure)'},{name:'X-Failed-Recipients',value:'jane@example.com'},{name:'In-Reply-To',value:'<'+sent[0].messageId+'>'}]}});
+    if(u.includes('/messages/newsletter?'))return Response.json({internalDate:String(Date.now()),payload:{headers:[{name:'From',value:'news@example.org'},{name:'Subject',value:'Weekly digest'}]}});
+    return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts[0].candidates=[{email:'jane@example.com',format:'first',percentage:60},{email:'jsmith@example.com',format:'flast',percentage:30},{email:'jane.smith@example.com',format:'first.last',percentage:5}];
+  const h=harness(data);await h.call('status');
+  assert.equal((await h.call('status')).body.bounceDetection,true);
+  const prepared=await h.call('batch/prepare',batchBody);const batch=prepared.body.batch;
+  const done=await h.call('batch/send',{batchId:batch.id,confirmed:true});assert.equal(done.body.batch.status,'complete');assert.equal(sent.length,2);
+  const grouped=await h.call('history/bounces',{contactIds:['jane','alex']});
+  assert.equal(grouped.status,200,JSON.stringify(grouped.body));assert.deepEqual([grouped.body.batches,grouped.body.newlyBounced],[1,1]);
+  assert.equal((await h.call('status')).body.history.find(r=>r.to==='jane@example.com').status,'bounced');
+  const check=await h.call('batch/bounces',{batchId:batch.id});
+  assert.equal(check.status,200,JSON.stringify(check.body));assert.equal(check.body.bounced,1);assert.equal(check.body.newlyBounced,0);
+  const jane=check.body.rows.find(r=>r.id==='jane'),alex=check.body.rows.find(r=>r.id==='alex');
+  assert.equal(jane.status,'bounced');assert.equal(alex.status,'sent');assert.deepEqual(jane.next,{email:'jsmith@example.com',format:'flast',percentage:30});assert.equal(alex.next,null);
+  assert.equal(check.body.retryBatch.rows.length,1);assert.equal(check.body.retryBatch.rows[0].to,'jsmith@example.com');assert.equal(check.body.retryBatch.retryOf,batch.id);
+  const status=await h.call('status');assert.equal(status.body.history.find(r=>r.to==='jane@example.com').status,'bounced');
+  assert.equal((await h.call('batch/prepare',{...batchBody,recipients:[{id:'jane',to:'jane@example.com'}]})).status,400);
+  const again=await h.call('batch/bounces',{batchId:batch.id});assert.equal(again.body.newlyBounced,0);assert.equal(again.body.bounced,1);
+  const retry=await h.call('batch/send',{batchId:check.body.retryBatch.id,confirmed:true});assert.equal(retry.body.batch.status,'complete');assert.equal(sent.at(-1).to,'jsmith@example.com');
+  const plain=batchSeed();const noScope=harness(plain);await noScope.call('status');assert.equal((await noScope.call('status')).body.bounceDetection,false);
+  const p2=await noScope.call('batch/prepare',batchBody);await noScope.call('batch/send',{batchId:p2.body.batch.id,confirmed:true});
+  assert.equal((await noScope.call('batch/bounces',{batchId:p2.body.batch.id})).status,403);
+});
+test('a verified run probes one recruiter per format, locks the format that sticks, emails the rest, and retries stragglers',async t=>{
+  let clock=Date.now();const sent=[];let dsnFor=null;
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);
+    if(u.endsWith('/messages/send')){const raw=Buffer.from(JSON.parse(opts.body).raw,'base64url').toString();sent.push(raw.match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}
+    if(u.endsWith('/profile'))return Response.json({historyId:'1'});
+    if(u.includes('/history?'))return Response.json({history:dsnFor?[{messagesAdded:[{message:{id:'dsn-'+dsnFor}}]}]:[]});
+    if(u.includes('/messages/dsn-'))return Response.json({internalDate:String(clock),payload:{headers:[{name:'From',value:'mailer-daemon@googlemail.com'},{name:'Subject',value:'Delivery Status Notification (Failure)'},{name:'X-Failed-Recipients',value:dsnFor}]}});
+    return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts=[
+    {id:'jane',name:'Jane Smith',company:'Example',selected:null,candidates:[{email:'jane@example.com',format:'first',percentage:60},{email:'jsmith@example.com',format:'flast',percentage:30}]},
+    {id:'alex',name:'Alex Chen',company:'Example',selected:null,candidates:[{email:'alex@example.com',format:'first',percentage:60},{email:'achen@example.com',format:'flast',percentage:30}]},
+    {id:'sam',name:'Sam Rivera',company:'Example',selected:null,candidates:[{email:'sam@example.com',format:'first',percentage:60}]}];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null});await h.call('status');
+  const prepared=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jane@example.com'},{id:'alex',to:'alex@example.com'},{id:'sam',to:'sam@example.com'}],subject:'Roles at {company}',message:'Hi {first_name}'});
+  assert.equal((await h.call('run/start',{batchId:prepared.body.batch.id})).status,400);
+  const started=await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true});
+  assert.equal(started.status,200,JSON.stringify(started.body));let run=started.body.run;
+  assert.equal(run.status,'running');assert.equal(run.stage,'probe');assert.equal(run.wave.kind,'probe');assert.deepEqual(sent,['jane@example.com']);
+  assert.deepEqual(run.people.map(p=>p.outcome),['watching','queued','queued']);
+  assert.equal((await h.call('batch/send',{batchId:prepared.body.batch.id,confirmed:true})).status,409);
+  assert.equal((await h.call('status')).body.activeRun.id,run.id);
+  dsnFor='jane@example.com';clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.deepEqual(sent,['jane@example.com','jsmith@example.com']);assert.equal(run.stage,'probe');assert.equal(run.people[0].attempts.map(a=>a.status).join(','),'bounced,sent');
+  dsnFor=null;clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.equal(run.verifiedFormat,'flast');assert.equal(run.stage,'rest');assert.equal(run.wave.kind,'rest');
+  assert.deepEqual(sent.slice(2),['achen@example.com','sam@example.com']);
+  dsnFor='sam@example.com';clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.equal(run.status,'complete',JSON.stringify(run.log));assert.deepEqual(run.summary,{reached:2,watching:0,retrying:0,exhausted:1,queued:0});
+  assert.deepEqual(run.people.map(p=>p.outcome),['reached','reached','exhausted']);assert.equal(sent.length,4);
+  assert.ok(run.log.some(l=>/jane@example.com bounced/.test(l.detail)));assert.ok(run.log.some(l=>/using the “flast” format/.test(l.detail)));
+  assert.equal((await h.call('run/active')).body.run.id,run.id);
+  const again=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jsmith@example.com'}],subject:'x',message:'y'});assert.equal(again.status,400);
+});
+test('when every address at the saved domain bounces, a run probes the fallback domain, switches everyone, and the next search remembers it',async t=>{
+  let clock=Date.now();const sent=[];const bouncing=new Set(['jane@example.com','jsmith@example.com']);
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);
+    if(u.endsWith('/messages/send')){const raw=Buffer.from(JSON.parse(opts.body).raw,'base64url').toString();sent.push(raw.match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}
+    if(u.endsWith('/profile'))return Response.json({historyId:'1'});
+    if(u.includes('/history?')){const last=sent.at(-1);return Response.json({history:bouncing.has(last)?[{messagesAdded:[{message:{id:'dsn-'+last}}]}]:[]});}
+    if(u.includes('/messages/dsn-')){const addr=decodeURIComponent(u.split('/messages/dsn-')[1].split('?')[0]);return Response.json({internalDate:String(clock),payload:{headers:[{name:'From',value:'mailer-daemon@googlemail.com'},{name:'Subject',value:'Delivery Status Notification (Failure)'},{name:'X-Failed-Recipients',value:addr}]}});}
+    if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a></div>');
+    return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts=[
+    {id:'jane',name:'Jane Smith',company:'Example',selected:null,domain:'example.com',alternateDomains:['alt.example'],candidates:[{email:'jane@example.com',format:'first',percentage:60},{email:'jsmith@example.com',format:'flast',percentage:30}]},
+    {id:'alex',name:'Alex Chen',company:'Example',selected:null,domain:'example.com',alternateDomains:['alt.example'],candidates:[{email:'alex@example.com',format:'first',percentage:60}]}];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null,discoverCompanyDomain:async()=>assert.fail('verified domain must win'),findPatterns:async d=>({domain:d,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}),resolveMx:async()=>[{exchange:'mx.alt.example'}]});
+  await h.call('status');
+  const prepared=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jane@example.com'},{id:'alex',to:'alex@example.com'}],subject:'Roles at {company}',message:'Hi {first_name}'});
+  let run=(await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true})).body.run;
+  assert.deepEqual(run.alternates,['alt.example']);assert.deepEqual(sent,['jane@example.com']);
+  clock+=61000;run=(await h.call('run/tick',{})).body.run;assert.deepEqual(sent,['jane@example.com','jsmith@example.com']);
+  clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.equal(sent[2],'jane.smith@alt.example',JSON.stringify(run.log));assert.equal(run.domain,'example.com');
+  clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.equal(run.verifiedFormat,'first.last');assert.equal(run.domain,'alt.example');assert.equal(run.originalDomain,'example.com');
+  assert.ok(run.log.some(l=>/Switched the email domain from example\.com to alt\.example/.test(l.detail)));
+  assert.deepEqual(sent.slice(3),['alex.chen@alt.example']);
+  clock+=61000;run=(await h.call('run/tick',{})).body.run;
+  assert.equal(run.status,'complete');assert.deepEqual(run.people.map(p=>p.outcome),['reached','reached']);
+  const contacts=(await h.call('status')).body.contacts;assert.ok(contacts.every(c=>c.domain==='alt.example'));assert.equal(contacts.find(c=>c.id==='alex').candidates[0].email,'alex.chen@alt.example');
+  const again=await h.call('discover',{company:'Example',fresh:true});
+  assert.equal(again.body.domain,'alt.example');assert.equal(again.body.domainResolution.status,'verified by delivery');
+});
+test('a domain with several bounces and no deliveries is probed after the fallback domain',async t=>{
+  const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.endsWith('/messages/send')){sent.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString().match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}if(u.endsWith('/profile'))return Response.json({historyId:'1'});if(u.includes('/history?'))return Response.json({history:[]});return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.history=[{id:'1',contactId:'old1',to:'a@example.com',status:'bounced',date:'2026-09-17T00:00:00Z'},{id:'2',contactId:'old2',to:'b@example.com',status:'bounced',date:'2026-09-17T00:00:00Z'},{id:'3',contactId:'old3',to:'c@example.com',status:'bounced',date:'2026-09-17T00:00:00Z'}];
+  data.contacts=[{id:'jane',name:'Jane Smith',company:'Example',selected:null,domain:'example.com',alternateDomains:['alt.example'],candidates:[{email:'jane@example.com',format:'first',percentage:60}]}];
+  const h=harness(data,{findRocketReachCompany:async()=>null,resolveMx:async()=>[{exchange:'mx'}]});await h.call('status');
+  const prepared=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jane@example.com'}],subject:'s',message:'m'});
+  const run=(await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true})).body.run;
+  assert.deepEqual(sent,['jane.smith@alt.example'],JSON.stringify(run.log));assert.equal(run.status,'running');
+});
+test('automatic recipients skip bounced addresses and report people whose every address bounced',()=>{
+  const contacts=[{id:'jane',name:'Jane Smith',candidates:[{email:'a@x.com'},{email:'b@x.com'}]},{id:'alex',name:'Alex Chen',candidates:[{email:'c@x.com'}]}];
+  const history=[{contactId:'jane',to:'a@x.com',status:'bounced'},{contactId:'alex',to:'c@x.com',status:'bounced'}];
+  const rows=automaticRecipients(contacts,['jane','alex'],history);
+  assert.deepEqual(rows.map(r=>[r.email,r.skipped]),[['b@x.com',''],['','Every address bounced']]);
+  assert.equal(automaticRecipients(contacts,['jane'],[{contactId:'jane',to:'a@x.com',status:'sent'}])[0].skipped,'Already contacted or pending');
+});
 test('batch stops on uncertainty and leaves later recipients unattempted',async t=>{
  let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;throw new Error('Network timeout');});
  const h=harness(batchSeed());await h.call('status');const {body}=await h.call('batch/prepare',batchBody);
@@ -238,4 +428,121 @@ test('multiple candidate mode requires explicit preparation and still rejects du
  assert.equal(preview.body.batch.multipleCandidates,true);
  const result=await h.call('batch/send',{batchId:preview.body.batch.id,confirmed:true});assert.equal(result.body.batch.status,'complete');assert.equal(sent,2);
  assert.equal((await h.call('batch/prepare',{recipients,subject:'Hello',message:'Hi',multipleCandidates:true})).status,400);
+});
+test('the RocketReach company lookup receives the employer text from each recruiter profile',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
+  const rocketUrl='https://rocketreach.co/scale-ai-email-format_1';let employers=null;
+  const h=harness(undefined,{findRocketReachCompany:async(company,options)=>{employers=options.employers;return {domain:'scale.com',source:rocketUrl,title:'Scale AI Email Format | scale.com Emails',mentions:3,urls:[rocketUrl]};},discoverCompanyDomain:async()=>assert.fail('unexpected'),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]})});
+  await h.call('status');const result=await h.call('discover',{company:'Scale AI'});
+  assert.equal(result.body.domain,'scale.com');assert.equal(employers.length,1);assert.match(employers[0],/University Recruiter at Scale AI/);
+});
+
+test('any email in a draft batch can be rewritten before authorizing, and the edited text is what gets sent',async t=>{
+ const messages=[];t.mock.method(globalThis,'fetch',async(url,opts)=>{messages.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString());return Response.json({id:'gmail-'+messages.length});});
+ const h=harness(batchSeed());await h.call('status');const batch=(await h.call('batch/prepare',batchBody)).body.batch;
+ const jane=batch.rows[0],alex=batch.rows[1];
+ const edited=await h.call('batch/update',{batchId:batch.id,rows:[{id:jane.id,to:jane.to,subject:'Quick question about Example',message:'Hi Jane,\r\nI rewrote this one by hand.\r\n'}]});
+ assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.batch.rows[0].subject,'Quick question about Example');assert.equal(edited.body.batch.rows[0].message,'Hi Jane,\nI rewrote this one by hand.');
+ assert.equal(edited.body.batch.rows[0].edited,true);assert.equal(edited.body.batch.rows[1].edited,undefined);assert.equal(edited.body.batch.owner,undefined);
+ const restored=await h.call('batch/update',{batchId:batch.id,rows:[{id:alex.id,to:alex.to,subject:alex.subject,message:alex.message}]});assert.equal(restored.body.batch.rows[1].edited,false);
+ for(const bad of [{id:jane.id,to:jane.to,message:'Hi {unknown}'},{id:jane.id,to:jane.to,subject:''},{id:jane.id,to:jane.to,subject:'x'.repeat(201)},{id:'nobody',to:jane.to,message:'x'},{id:jane.id,to:'other@example.com',message:'x'}]){const r=await h.call('batch/update',{batchId:batch.id,rows:[bad]});assert.equal(r.status,400,JSON.stringify(bad));}
+ assert.equal((await h.call('batch/update',{batchId:batch.id,rows:[]})).status,400);
+ assert.equal((await h.call('batch/update',{batchId:'missing',rows:[{id:jane.id,to:jane.to,message:'x'}]})).status,409);
+ const sent=await h.call('batch/send',{batchId:batch.id,confirmed:true});assert.equal(sent.body.batch.status,'complete');
+ assert.equal(part(messages[0],'text/plain'),'Hi Jane,\nI rewrote this one by hand.');assert.match(messages[0],/Subject: =\?UTF-8\?B\?/);assert.equal(part(messages[1],'text/plain'),alex.message);
+ assert.equal((await h.call('batch/update',{batchId:batch.id,rows:[{id:jane.id,to:jane.to,message:'too late'}]})).status,409);
+ const history=(await h.call('status')).body.history;assert.equal(history.find(r=>r.to===jane.to).message,'Hi Jane,\nI rewrote this one by hand.');
+});
+test('extension batches are edited through the extension route only',async t=>{
+ const messages=[];
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a><div class="result__snippet">Recruiter at Example</div></div>');if(u.includes('gmail/v1/users/me/messages/send')){messages.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString());return Response.json({id:'gmail-1'});}return new Response('Blocked',{status:403});});
+ const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}, my resume is attached.'};data.resume={filename:'Resume.pdf',type:'application/pdf',size:15,savedAt:'2026-09-17T00:00:00.000Z'};
+ const h=harness(data,{discoverCompanyDomain:async()=>({domain:'example.com',status:'published',sources:[],message:'Published'}),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}),findRocketReachCompany:async()=>null});
+ writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7 resume');
+ const token=(await h.call('status')).body.extensionToken;const ext={'x-extension-token':token};
+ const preview=await h.call('extension/preview',{company:'Example'},ext);assert.equal(preview.status,200,JSON.stringify(preview.body));const row=preview.body.batch.rows[0];
+ assert.equal((await h.call('batch/update',{batchId:preview.body.batch.id,rows:[{id:row.id,to:row.to,message:'from the web session'}]})).status,409);
+ const edited=await h.call('extension/update',{batchId:preview.body.batch.id,rows:[{id:row.id,to:row.to,message:'Hi Jane, edited in the extension panel.'}]},ext);
+ assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.batch.rows[0].message,'Hi Jane, edited in the extension panel.');assert.equal(edited.body.batch.rows[0].subject,'Roles at Example');
+ const sent=await h.call('extension/send',{batchId:preview.body.batch.id,confirmed:true},ext);assert.equal(sent.status,200,JSON.stringify(sent.body));
+ assert.equal(part(messages[0],'text/plain'),'Hi Jane, edited in the extension panel.');
+});
+test('a run moves on the moment a probe bounces instead of waiting out the watch window',async t=>{
+  let clock=Date.now();const sent=[];let dsnFor=null;
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);
+    if(u.endsWith('/messages/send')){sent.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString().match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}
+    if(u.endsWith('/profile'))return Response.json({historyId:'1'});
+    if(u.includes('/history?'))return Response.json({history:dsnFor?[{messagesAdded:[{message:{id:'dsn-'+dsnFor}}]}]:[]});
+    if(u.includes('/messages/dsn-'))return Response.json({internalDate:String(clock),payload:{headers:[{name:'From',value:'mailer-daemon@googlemail.com'},{name:'Subject',value:'Delivery Status Notification (Failure)'},{name:'X-Failed-Recipients',value:dsnFor}]}});
+    return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts=[{id:'jane',name:'Jane Smith',company:'Example',selected:null,candidates:[{email:'jane@example.com',format:'first',percentage:60},{email:'jsmith@example.com',format:'flast',percentage:30}]},
+    {id:'alex',name:'Alex Chen',company:'Example',selected:null,candidates:[{email:'alex@example.com',format:'first',percentage:60},{email:'achen@example.com',format:'flast',percentage:30}]}];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null});await h.call('status');
+  const prepared=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jane@example.com'},{id:'alex',to:'alex@example.com'}],subject:'s',message:'m'});
+  let run=(await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true})).body.run;assert.deepEqual(sent,['jane@example.com']);
+  // The bounce lands 8 seconds in: the next format goes out on the very next check, not after 60s.
+  dsnFor='jane@example.com';clock+=8000;run=(await h.call('run/tick',{})).body.run;
+  assert.deepEqual(sent,['jane@example.com','jsmith@example.com'],JSON.stringify(run.log));assert.equal(run.wave.kind,'probe');
+  assert.ok(run.log.some(l=>/jsmith@example\.com|bounced after 8s/.test(l.detail)));
+  // An address that has not bounced is still watched for the full window before it counts as delivered.
+  dsnFor=null;clock+=15000;run=(await h.call('run/tick',{})).body.run;assert.equal(run.stage,'probe');assert.equal(sent.length,2);
+  clock+=50000;run=(await h.call('run/tick',{})).body.run;assert.equal(run.verifiedFormat,'flast');assert.deepEqual(sent.at(-1),'achen@example.com');
+});
+test('a delivery-verified domain reuses the RocketReach formats filed under the wrong domain and ranks the delivered format first',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>{const u=String(url);
+    if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a></div>');
+    return new Response('Blocked',{status:403});});
+  const data=batchSeed();
+  data.verifiedDomains={example:{domain:'alt.example',format:'first.last',verifiedAt:'2026-09-18T15:50:55.773Z',run:'r1'}};
+  data.contacts=[{id:'jane',name:'Jane Smith',company:'Example',selected:null,domain:'alt.example',candidates:[{email:'jane.smith@alt.example',format:'first.last'}]}];
+  data.history=[{id:'h1',contactId:'jane',to:'jane@alt.example',status:'bounced',date:'2026-09-18T15:49:00Z'},{id:'h2',contactId:'jane',to:'jane.smith@alt.example',status:'sent',date:'2026-09-18T15:50:00Z'}];
+  const patterns={format:'first',percentage:60,source:'https://rocketreach.co/example-email-format_b1',context:''};
+  const researched=[];
+  const h=harness(data,{
+    findRocketReachCompany:async()=>({domain:'example.com',source:'https://rocketreach.co/example-email-format_b1',title:'Example Email Format | example.com Emails',pages:[{url:'https://rocketreach.co/example-email-format_b1',title:'Example Email Format | example.com Emails'}]}),
+    findPatterns:async d=>{researched.push(d);return {domain:d,checkedAt:new Date().toISOString(),reportedPatterns:d==='example.com'?[patterns,{...patterns,format:'first.last',percentage:35}]:[],sources:[],warnings:[]};},
+    resolveMx:async()=>[{exchange:'mx'}]});
+  await h.call('status');
+  const found=await h.call('discover',{company:'Example',fresh:true});
+  assert.equal(found.body.domain,'alt.example');assert.equal(found.body.domainResolution.status,'verified by delivery');
+  assert.deepEqual(researched,['example.com'],'formats come from the RocketReach page, never a hunt for the verified domain');
+  assert.equal(found.body.patternReport.carriedFrom,'example.com');assert.equal(found.body.patternReport.verifiedFormat,'first.last');
+  const top=found.body.results[0].candidates[0];
+  assert.equal(top.email,'jane.smith@alt.example');assert.ok(top.verified);assert.match(top.evidence,/Delivered without a bounce on 2026-09-18/);
+  assert.deepEqual(found.body.formatEvidence,{first:{sent:0,bounced:1},'first.last':{sent:1,bounced:0}});
+  assert.ok(found.body.diagnostics.events.some(e=>/applying them at alt\.example/.test(e.detail)));
+});
+test('resuming a paused run whose probe recruiter has since been reached never emails that person again',async t=>{
+  let clock=Date.now();const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.endsWith('/messages/send')){sent.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString().match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}if(u.endsWith('/profile'))return Response.json({historyId:'1'});if(u.includes('/history?'))return Response.json({history:[]});return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts=[{id:'jane',name:'Jane Smith',company:'Example',selected:null,domain:'example.com',candidates:[{email:'jane@example.com',format:'first',percentage:60},{email:'jane.smith@example.com',format:'first.last',percentage:30}]},
+    {id:'alex',name:'Alex Chen',company:'Example',selected:null,domain:'example.com',candidates:[{email:'alex@example.com',format:'first',percentage:60},{email:'alex.chen@example.com',format:'first.last',percentage:30}]}];
+  const started=new Date(clock-600000).toISOString();
+  data.runs=[{id:'old',owner:'x',company:'Example',domain:'example.com',originalDomain:'example.com',probeDomain:'example.com',alternates:[],startedAt:started,finishedAt:null,template:{subject:'s',message:'m'},attachResume:false,overrides:{},people:[{id:'jane',name:'Jane Smith'},{id:'alex',name:'Alex Chen'}],probeIndex:0,stage:'probe',mode:'verified',status:'stopped',verifiedFormat:null,wave:null,log:[],error:'A send is already in progress.'}];
+  data.history=[{id:'h1',contactId:'jane',name:'Jane Smith',to:'jane@example.com',subject:'s',message:'m',status:'bounced',date:new Date(clock-500000).toISOString()},{id:'h2',contactId:'jane',name:'Jane Smith',to:'jane.smith@example.com',subject:'s',message:'m',status:'sent',date:new Date(clock-100000).toISOString()}];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null});await h.call('status');
+  const resumed=await h.call('run/resume',{runId:'old'});assert.equal(resumed.status,200,JSON.stringify(resumed.body));
+  const run=resumed.body.run;assert.equal(run.verifiedFormat,'first.last');assert.deepEqual(sent,['alex.chen@example.com']);
+  assert.equal(run.people[0].outcome,'reached');
+});
+test('Stop sending halts a run immediately, sends nothing more, and Resume continues it',async t=>{
+  let clock=Date.now();const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.endsWith('/messages/send')){sent.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString().match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}if(u.endsWith('/profile'))return Response.json({historyId:'1'});if(u.includes('/history?'))return Response.json({history:[]});return new Response('Blocked',{status:403});});
+  const data=batchSeed();data.tokens.scopes='openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata';
+  data.contacts=[{id:'jane',name:'Jane Smith',company:'Example',selected:null,candidates:[{email:'jane@example.com',format:'first',percentage:60}]},{id:'alex',name:'Alex Chen',company:'Example',selected:null,candidates:[{email:'alex@example.com',format:'first',percentage:60}]}];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null});await h.call('status');
+  const prepared=await h.call('batch/prepare',{recipients:[{id:'jane',to:'jane@example.com'},{id:'alex',to:'alex@example.com'}],subject:'s',message:'m'});
+  let run=(await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true})).body.run;assert.deepEqual(sent,['jane@example.com']);
+  const stopped=await h.call('run/stop',{runId:run.id});assert.equal(stopped.status,200,JSON.stringify(stopped.body));run=stopped.body.run;
+  assert.equal(run.status,'stopped');assert.equal(run.stoppedBy,'user');assert.match(run.error,/Stopped by you/);
+  assert.ok(run.log.some(l=>/jane@example\.com had already been sent and cannot be recalled/.test(l.detail)));
+  assert.equal((await h.call('run/stop',{runId:run.id})).status,400,'stopping twice is an error, not a second stop');
+  // The timer leaves a stopped run alone, even well past the watch window.
+  clock+=120000;run=(await h.call('run/tick',{})).body.run;assert.equal(run.status,'stopped');assert.deepEqual(sent,['jane@example.com']);
+  assert.equal((await h.call('status')).body.activeRun.stoppedBy,'user');
+  // Resume re-attaches to the probe already out; the window has long passed, so it is judged delivered and Alex is emailed.
+  run=(await h.call('run/resume',{runId:run.id})).body.run;assert.equal(run.status,'running');assert.equal(run.stoppedBy,null);
+  run=(await h.call('run/tick',{})).body.run;assert.equal(run.verifiedFormat,'first');assert.deepEqual(sent,['jane@example.com','alex@example.com']);
 });

@@ -68,6 +68,8 @@ export function apiProviders(env = {}) {
   return providers;
 }
 
+const transientSearchError = /aborted|timed? ?out|ECONNRESET|EAI_AGAIN|socket hang up|fetch failed|\(5\d\d\)/i;
+apiProviders.names = new Set(['google-api', 'serper', 'serpapi']);
 export async function searchWeb(query, { env = {}, fetcher = fetch, read = publicPage, onEvent = () => {}, stage = 'Search', scrape = ['duckduckgo', 'bing'], accept = rows => rows.length > 0 } = {}) {
   const providers = [...apiProviders(env), ...scrape.map(name => ({ name, label: scrapers[name].label, source: scrapers[name].url, async search(q) { const html = await read(scrapers[name].url(q)); if (blockedMarkers.test(html)) throw new Error('Search source requires an interactive check.'); scrapers[name].check(html); return parseSearchHtml(html, name); } }))];
   const warnings = [];
@@ -76,7 +78,12 @@ export async function searchWeb(query, { env = {}, fetcher = fetch, read = publi
     const source = provider.source(query);
     onEvent({ stage, status: 'running', detail: `${provider.name}: ${query}`, source });
     try {
-      const rows = (await provider.search(query, fetcher)).filter(row => row.url);
+      // A search API occasionally times out on a single request; one retry keeps that from sinking the whole search.
+      const rows = (await provider.search(query, fetcher).catch(async error => {
+        if (!transientSearchError.test(error.message) || !apiProviders.names.has(provider.name)) throw error;
+        onEvent({ stage, status: 'partial', detail: `${provider.name}: ${error.message}. Retrying once.`, source });
+        return provider.search(query, fetcher);
+      })).filter(row => row.url);
       available++;
       const done = accept(rows);
       onEvent({ stage, status: rows.length ? 'ok' : 'empty', detail: `${provider.name}: ${rows.length} results${rows.length && !done ? '; none matched, trying the next source' : ''}`, source });

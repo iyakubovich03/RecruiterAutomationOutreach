@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Recruiter Outreach</title>
+<style>
+  body{margin:0;width:340px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#182821;background:#fafbf8}
+  .wrap{padding:16px}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:12px}.mark{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#285740;color:#fff;font-weight:800;font-size:17px}h1{font-size:15px;margin:0}
+  .eyebrow{font-size:10px;letter-spacing:2px;color:#668357;font-weight:700;margin-top:14px}
+  ul{list-style:none;padding:0;margin:8px 0}li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid #e4e8e2;font-size:12px}li span:last-child{color:#748078;text-align:right}.ok{color:#3f6b48}.bad{color:#946246}
+  input{width:100%;box-sizing:border-box;border:1px solid #dde3d8;border-radius:6px;padding:9px 10px;background:#fff;font-size:12px;margin-top:6px}
+  .row{display:flex;gap:8px;margin-top:10px}.btn{flex:1;border:1px solid #d9dfd4;background:#fff;border-radius:7px;padding:9px 10px;font-weight:600;cursor:pointer;color:#42513c;font-size:12px}.btn.primary{background:#285740;color:#fff;border-color:#285740}.btn:disabled{opacity:.45}
+  .hint{font-size:11px;color:#748078;margin:6px 0 0}.alert{background:#fff4ef;border:1px solid #eed4c5;color:#946246;border-radius:7px;padding:8px 10px;font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span class="mark">R</span><h1>Recruiter Outreach</h1></div>
+  <div id="status"><p class="hint">Checking the local app…</p></div>
+  <div class="eyebrow">RUN ON THIS PAGE</div>
+  <input id="company" type="text" placeholder="Company name (leave blank to auto-detect)">
+  <div class="row"><button id="run" class="btn primary">Find recruiters →</button><button id="open" class="btn">Open app ↗</button></div>
+  <p class="hint">Normally the R badge appears by itself after you submit an application on Greenhouse, Lever, Ashby, Workday, LinkedIn and most career sites.</p>
+  <div class="eyebrow">EXTENSION TOKEN</div>
+  <input id="token" type="password" placeholder="Paste the token from the app’s Connections tab" autocomplete="off">
+  <div class="row"><button id="save" class="btn">Save token</button></div>
+  <p class="hint">Found in the app under Connections → Chrome extension.</p>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

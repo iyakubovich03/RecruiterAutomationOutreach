@@ -39,3 +39,11 @@ test('parses Google HTML redirect links and DuckDuckGo wrapped links',()=>{
  assert.deepEqual(parseSearchHtml('<a href="/url?q=https%3A%2F%2Frocketreach.co%2Fx-email-format_1&amp;sa=U"><h3>X</h3></a>','google')[0],{url:'https://rocketreach.co/x-email-format_1',title:'X',snippet:''});
  assert.equal(parseSearchHtml('<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fp">P</a></div>','duckduckgo')[0].url,'https://example.com/p');
 });
+test('a search API request that times out is retried once before the next source is tried',async()=>{
+ let calls=0;const events=[];
+ const ok=await searchWeb('q',{env:{SERPAPI_KEY:'a'},onEvent:e=>events.push(e),fetcher:async()=>{calls++;if(calls===1)throw new Error('The operation was aborted due to timeout');return Response.json({organic_results:[{link:'https://example.com/a',title:'A'}]});},read:async()=>{throw new Error('must not scrape');}});
+ assert.equal(calls,2);assert.equal(ok.rows.length,1);assert.ok(events.some(e=>e.status==='partial'&&/Retrying once/.test(e.detail)));
+ // A definite API error (bad key) is not retried.
+ let again=0;const bad=await searchWeb('q',{env:{SERPAPI_KEY:'a'},scrape:[],fetcher:async()=>{again++;return Response.json({error:'Invalid API key'});}});
+ assert.equal(again,1);assert.equal(bad.rows.length,0);
+});
