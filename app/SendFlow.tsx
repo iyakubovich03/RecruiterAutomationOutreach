@@ -2,12 +2,14 @@
 import { useEffect, useState } from 'react';
 import { automaticRecipients } from './outreach.mjs';
 
-export type Batch = { id: string; from: string; status: string; attachment?: string | null; retryOf?: string; rows: { id: string; to: string; name: string; subject: string; message: string; status: string; error?: string; edited?: boolean }[] };
+export type Batch = { id: string; from: string; status: string; attachment?: string | null; retryOf?: string; rows: { id: string; to: string; name: string; source?: string; subject: string; message: string; status: string; error?: string; edited?: boolean }[] };
 type Draft = { subject: string; message: string };
 export type Resume = { filename: string; type: string; size: number; savedAt: string };
-export type RunPerson = { id: string; name: string; title: string; attempts: { to: string; format: string; status: string; date: string; bounce: { at: string; subject: string } | null }[]; outcome: string };
+export type RunPerson = { id: string; name: string; title: string; source?: string; attempts: { to: string; format: string; status: string; date: string; bounce: { at: string; subject: string } | null }[]; outcome: string };
 export type Run = { id: string; company: string; domain: string; originalDomain: string; alternates: string[]; status: string; stage: string; mode: string; verifiedFormat: string | null; error: string | null; stoppedBy?: string | null; startedAt: string; finishedAt: string | null; attachment: string | null; watchSeconds: number; wave: { kind: string; secondsLeft: number; checks: number; contactIds: string[] } | null; people: RunPerson[]; summary: { reached: number; watching: number; retrying: number; exhausted: number; queued: number }; log: { at: string; status: string; detail: string }[] };
-type Contact = { id: string; name: string; company: string; selected: string | null; candidates: { email: string; evidence: string }[] };
+type Contact = { id: string; name: string; company: string; source?: string; selected: string | null; candidates: { email: string; evidence: string }[] };
+// Every recruiter name links to the LinkedIn result it came from, so a quick check is one click away wherever the name appears.
+export const personLink = (name: string, source?: string) => source ? <a className="person-link" href={source} target="_blank" rel="noreferrer" title="Open LinkedIn profile">{name} ↗</a> : <>{name}</>;
 type Props = {
   mode: 'default' | 'custom'; contactIds: string[]; runId?: string | null; contacts: Contact[]; history: { contactId: string | null; to: string; status: string }[];
   connected: boolean; account: string | null; template: { subject: string; message: string }; resume: Resume | null; bounceDetection: boolean;
@@ -108,7 +110,7 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
     const key = row.id + '|' + row.to, draft = edits[key] || { subject: row.subject, message: row.message }, dirty = !!edits[key];
     const change = (patch: Partial<Draft>) => setEdits(current => { const next = { ...current[key] || { subject: row.subject, message: row.message }, ...patch }; if (next.subject === row.subject && next.message === row.message) { const rest = { ...current }; delete rest[key]; return rest; } return { ...current, [key]: next }; });
     return <details className="history-item" key={key} open={i === 0 || row.edited}>
-      <summary><span><strong>{row.name}</strong><small>{row.to} · {row.subject}{attachment ? ' · 📎' : ''}</small></span><span className={'tag' + (dirty ? ' warn' : row.edited ? ' green' : '')}>{dirty ? 'Unsaved' : row.edited ? 'Edited' : 'Ready'}</span></summary>
+      <summary><span><strong>{personLink(row.name, row.source)}</strong><small>{row.to} · {row.subject}{attachment ? ' · 📎' : ''}</small></span><span className={'tag' + (dirty ? ' warn' : row.edited ? ' green' : '')}>{dirty ? 'Unsaved' : row.edited ? 'Edited' : 'Ready'}</span></summary>
       <label className="field">Subject<input maxLength={200} value={draft.subject} disabled={!!busy} onChange={e => change({ subject: e.target.value })} /></label>
       <label className="field">Message<textarea rows={10} maxLength={20000} value={draft.message} disabled={!!busy} onChange={e => change({ message: e.target.value })} /></label>
       {dirty && <div className="edit-row"><span className="hint">Save this email before authorizing the batch.</span><button className="secondary" disabled={!!busy} onClick={() => setEdits(current => { const rest = { ...current }; delete rest[key]; return rest; })}>Discard</button><button className="primary" disabled={!!busy} onClick={() => saveRow(target, row, apply)}>{busy === 'edit' ? 'Saving…' : 'Save changes'}</button></div>}
@@ -127,7 +129,7 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
         {run.error && <div className="alert error">{run.error}</div>}
         {run.verifiedFormat && <p className="hint ok">✓ The “{run.verifiedFormat}” format got through{run.domain !== run.originalDomain ? ` at ${run.domain} (switched from ${run.originalDomain})` : ''}; everyone else is emailed at that format.</p>}
         {!run.verifiedFormat && run.alternates.length > 0 && run.status === 'running' && <p className="hint">If every address at {run.domain} bounces, {run.alternates.join(' and ')} will be tried next.</p>}
-        <ul className="recipient-list">{run.people.map(p => <li key={p.id}><span><strong>{p.name}</strong>{p.title && <small> · {p.title}</small>}<br /><small>{p.attempts.length ? p.attempts.map((a, i) => <span key={a.to + i}>{i > 0 ? ' → ' : ''}{a.to} <span className={'status ' + a.status}>{attemptLabel(a.status)}</span></span>) : 'Waiting for the verified format'}</small></span><span className={'status ' + (p.outcome === 'reached' ? 'sent' : p.outcome === 'exhausted' ? 'bounced' : '')}>{outcomeLabel[p.outcome] || p.outcome}</span></li>)}</ul>
+        <ul className="recipient-list">{run.people.map(p => <li key={p.id}><span><strong>{personLink(p.name, p.source)}</strong>{p.title && <small> · {p.title}</small>}<br /><small>{p.attempts.length ? p.attempts.map((a, i) => <span key={a.to + i}>{i > 0 ? ' → ' : ''}{a.to} <span className={'status ' + a.status}>{attemptLabel(a.status)}</span></span>) : 'Waiting for the verified format'}</small></span><span className={'status ' + (p.outcome === 'reached' ? 'sent' : p.outcome === 'exhausted' ? 'bounced' : '')}>{outcomeLabel[p.outcome] || p.outcome}</span></li>)}</ul>
         <details className="pattern-detail"><summary>Activity ({run.log.length})</summary>{run.log.map((l, i) => <p key={i} className={l.status === 'error' ? 'diagnostic-error' : ''}>{new Date(l.at).toLocaleTimeString()} · {l.detail}</p>)}</details>
         <div className="cta-row">
           {run.status === 'running' && !confirmStop && <button className="secondary" onClick={onClose}>Run in background</button>}
@@ -159,7 +161,7 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
         {!connected && <><p className="hint">Connect Gmail once, then come back — your results stay here.</p><div className="cta-row"><button className="secondary" onClick={onClose}>Not now</button><button className="primary" onClick={onConnect}>Connect Gmail ↗</button></div></>}
         {connected && <>
           <ul className="recipient-list">
-            {recipients.map(r => <li key={r.contact.id + r.email} className={r.skipped ? 'skipped' : ''}><span><strong>{r.contact.name}</strong> · {r.contact.company}</span><span>{r.email || '—'}{r.skipped && <small> · {r.skipped}</small>}</span></li>)}
+            {recipients.map(r => <li key={r.contact.id + r.email} className={r.skipped ? 'skipped' : ''}><span><strong>{personLink(r.contact.name, r.contact.source)}</strong> · {r.contact.company}</span><span>{r.email || '—'}{r.skipped && <small> · {r.skipped}</small>}</span></li>)}
             {recipients.filter(r => !r.skipped).length > 8 && <li className="skipped"><small>Only the first eight people are included in one run.</small></li>}
           </ul>
           {!ready.length && <><p className="hint">Nobody left to email — everyone here was already contacted.</p><div className="cta-row"><button className="secondary" onClick={onClose}>Close</button></div></>}

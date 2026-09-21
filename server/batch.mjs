@@ -14,7 +14,7 @@ export function buildBatch(recipients,contacts,history,from,subject,message,mult
    const c=contacts.find(c=>c.id===id);if(!c||!c.candidates.some(e=>e.email===to))throw new Error('Choose an available email candidate for each recruiter.');
    if(seen.has(to)||(!multipleCandidates&&ids.has(id)))throw new Error('Each recruiter and email address may appear only once in a batch.');seen.add(to);ids.add(id);
    if(outreachBlocked(history,id,to,multipleCandidates))throw new Error(`Outreach already exists for ${c.name}. Check Gmail Sent before sending again.`);
-   const row={id,to,name:c.name,subject:personalize(subject,c,to),message:personalize(message,c,to),status:'not_started'};
+   const row={id,to,name:c.name,source:c.source||'',subject:personalize(subject,c,to),message:personalize(message,c,to),status:'not_started'};
    mimeMessage({...row,from});return row;
  });
 }

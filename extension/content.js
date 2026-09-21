@@ -46,6 +46,7 @@
     p{margin:6px 0;color:#4f5f4a}.hint{font-size:11px;color:#748078}
     input[type=text]{width:100%;border:1px solid #dde3d8;border-radius:6px;padding:9px 10px;background:#fff;font-size:13px}
     .row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+    .person-link{color:inherit;text-decoration:none;border-bottom:1px dotted #9fb08f}.person-link:hover{color:#285740;border-bottom-style:solid}
     .btn{border:0;border-radius:7px;padding:10px 14px;font-weight:600;cursor:pointer;background:#fff;border:1px solid #d9dfd4;color:#42513c}
     .btn.primary{background:#285740;color:#fff;border-color:#285740}.btn.danger{color:#8f3a2a;border-color:#e2c2b8;background:#fff6f3}.btn:disabled{opacity:.45;cursor:not-allowed}
     .steps{display:grid;gap:6px;margin:10px 0}.step{padding:8px 10px;border-radius:7px;background:#f0f4e9;font-size:12px;color:#748078}.step.active{background:#e0e8d9;color:#244c31;font-weight:600}.step.done{color:#3f6b48}
@@ -70,6 +71,8 @@
 
   // Every email in a draft batch can be rewritten before it is authorized. Edits are saved to the app,
   // which validates them like generated ones; `onSaved` receives the updated batch and re-renders.
+  // Every recruiter name links to the LinkedIn result it came from.
+  const personLink = (name, source) => source ? h('a', { class: 'person-link', href: source, target: '_blank', rel: 'noreferrer', title: 'Open LinkedIn profile' }, `${name} ↗`) : name;
   function editableRows(batch, onSaved, onDirty = () => {}) {
     const dirty = new Set();
     return batch.rows.map((row, i) => {
@@ -86,7 +89,7 @@
         if (result.error) { status.textContent = result.error; status.className = 'hint bad'; save.removeAttribute('disabled'); return; }
         dirty.delete(key); onDirty(dirty.size > 0); onSaved(result.batch);
       });
-      const d = h('details', {}, h('summary', {}, h('strong', {}, row.name), ` · ${row.to} · 📎`, row.edited ? h('span', { class: 'edited' }, 'EDITED') : null),
+      const d = h('details', {}, h('summary', {}, h('strong', {}, personLink(row.name, row.source)), ` · ${row.to} · 📎`, row.edited ? h('span', { class: 'edited' }, 'EDITED') : null),
         h('label', { class: 'field' }, 'Subject', subject), h('label', { class: 'field' }, 'Message', message), h('div', { class: 'edit-row' }, status, discard, save));
       if (i === 0 || row.edited) d.setAttribute('open', '');
       return d;
@@ -139,7 +142,7 @@
   function showPreview(result) {
     const { discovery, recipients, batch, reason } = result;
     const chips = h('div', {}, h('span', { class: 'chip', title: discovery.domainMessage || '' }, discovery.domain ? `Email domain · ${discovery.domain}` : 'Email domain not established'), discovery.formats ? h('span', { class: 'chip' }, `${discovery.formats} RocketReach formats · most common ${discovery.topFormat.format} (${discovery.topFormat.percentage}%)`) : h('span', { class: 'chip' }, 'No RocketReach formats · generic guesses'), discovery.domainMessage ? h('p', { class: 'hint' }, discovery.domainMessage) : null);
-    const people = h('ul', {}, discovery.results.map(r => { const skip = recipients.find(x => x.name === r.name)?.skipped; return h('li', { class: skip ? 'skipped' : '' }, h('span', {}, h('strong', {}, r.name), h('br'), h('span', { class: 'hint' }, r.title)), h('span', {}, r.candidates[0]?.email || '—', skip ? h('br') : null, skip ? h('span', { class: 'hint' }, skip) : null)); }));
+    const people = h('ul', {}, discovery.results.map(r => { const skip = recipients.find(x => x.name === r.name)?.skipped; return h('li', { class: skip ? 'skipped' : '' }, h('span', {}, h('strong', {}, personLink(r.name, r.source)), h('br'), h('span', { class: 'hint' }, r.title)), h('span', {}, r.candidates[0]?.email || '—', skip ? h('br') : null, skip ? h('span', { class: 'hint' }, skip) : null)); }));
     if (!batch) {
       const retry = h('input', { type: 'text', value: state.company, placeholder: 'Company name' });
       return panelShell(`${discovery.results.length} recruiters at ${discovery.company}`, chips, people, h('div', { class: 'alert' }, reason), h('p', { class: 'hint' }, 'Tip: use the company’s everyday name (for example “Scale AI”, not “scaleai”). Every request is listed under Requests in the app.'), retry, h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => runPreview(retry.value.trim(), true) }, 'Search again →'), h('button', { class: 'btn', onclick: () => ask({ type: 'open-app' }) }, 'Open app ↗'), h('button', { class: 'btn', onclick: hide }, 'Close')));
@@ -165,7 +168,7 @@
     return `Emailing everyone at “${run.verifiedFormat}” · watching for bounces`;
   }
   function renderRun(run, onNew) {
-    const people = h('ul', {}, run.people.map(p => h('li', {}, h('span', {}, h('strong', {}, p.name), h('br'), h('span', { class: 'hint' }, p.attempts.length ? p.attempts.map((a, i) => `${i ? ' → ' : ''}${a.to} (${statusLabel(a)})`).join('') : 'Waiting for the verified format')), h('span', { class: p.outcome === 'reached' ? 'ok' : p.outcome === 'exhausted' ? 'bad' : '' }, outcomeLabel[p.outcome] || p.outcome))));
+    const people = h('ul', {}, run.people.map(p => h('li', {}, h('span', {}, h('strong', {}, personLink(p.name, p.source)), h('br'), h('span', { class: 'hint' }, p.attempts.length ? p.attempts.map((a, i) => `${i ? ' → ' : ''}${a.to} (${statusLabel(a)})`).join('') : 'Waiting for the verified format')), h('span', { class: p.outcome === 'reached' ? 'ok' : p.outcome === 'exhausted' ? 'bad' : '' }, outcomeLabel[p.outcome] || p.outcome))));
     const parts = [h('div', { class: 'eyebrow' }, `${run.status === 'running' ? 'VERIFIED SEND · IN PROGRESS' : run.status === 'complete' ? 'VERIFIED SEND · DONE' : run.stoppedBy ? 'VERIFIED SEND · STOPPED' : 'VERIFIED SEND · PAUSED'} · ${run.company}`)];
     if (run.status === 'running' && run.wave) parts.push(h('p', { class: 'hint' }, h('span', { class: 'spinner' }), ` Watching the inbox — moves on the moment a bounce arrives, or after ${run.wave.secondsLeft}s more if nothing comes back${run.wave.checks ? ` · checked ${run.wave.checks}×` : ''}. You can close this panel — the run continues in the app.`));
     if (run.error) parts.push(h('div', { class: 'alert' }, run.error));
@@ -205,7 +208,7 @@
   const WATCH_SECONDS = 60, CHECK_EVERY = 10;
   const statusLabel = r => r.status === 'sent' ? 'Submitted' : r.status === 'bounced' ? 'Bounced' : r.status === 'not_started' ? 'Not attempted' : r.status;
   function rowsList(rows) {
-    return h('ul', {}, rows.map(r => h('li', {}, h('span', {}, h('strong', {}, r.name)), h('span', { class: r.status === 'sent' ? 'ok' : r.status === 'bounced' ? 'bad' : '' }, `${r.to} · ${statusLabel(r)}${r.error ? ' · ' + r.error : ''}`, r.status === 'bounced' ? h('br') : null, r.status === 'bounced' ? h('span', { class: 'hint' }, r.next ? `Next best: ${r.next.email}${r.next.percentage != null ? ` (${r.next.format}, ${r.next.percentage}%)` : ''}` : 'No other address left to try') : null))));
+    return h('ul', {}, rows.map(r => h('li', {}, h('span', {}, h('strong', {}, personLink(r.name, r.source))), h('span', { class: r.status === 'sent' ? 'ok' : r.status === 'bounced' ? 'bad' : '' }, `${r.to} · ${statusLabel(r)}${r.error ? ' · ' + r.error : ''}`, r.status === 'bounced' ? h('br') : null, r.status === 'bounced' ? h('span', { class: 'hint' }, r.next ? `Next best: ${r.next.email}${r.next.percentage != null ? ` (${r.next.format}, ${r.next.percentage}%)` : ''}` : 'No other address left to try') : null))));
   }
   async function runSend(batch) {
     state.busy = true;

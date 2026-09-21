@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import SearchDiagnostics, { type SearchDebug } from './SearchDiagnostics';
 import SearchProgress from './SearchProgress';
-import SendFlow, { type Batch, type Resume, type Run, runHeadline } from './SendFlow';
+import SendFlow, { type Batch, type Resume, type Run, runHeadline, personLink } from './SendFlow';
 import { nextCandidate } from './outreach.mjs';
 
 type PatternReport = { expiresAt?: string; retryAfter?: string; refreshError?: string; carriedFrom?: string; verifiedFormat?: string; verifiedAt?: string; reportedPatterns?: { format: string; percentage: number | null; source: string; context: string }[]; domain: string; checkedAt: string; sources: { source: string; status: string; examples: number; detail?: string }[]; warnings: string[] };
@@ -138,7 +138,7 @@ export default function Home() {
               </div> : null}
               {discovery.results.length === 0 ? <div className="empty"><span className="empty-icon">↗</span><h3>No recruiters found</h3><p>Try the company’s common short name, or open Requests to see exactly what the search returned.</p><button className="secondary" onClick={() => void searchCompany(true)}>Search again</button></div> : <>
                 <div className="profile-grid">{discovery.results.map(row => <article className="profile-card" key={row.source}>
-                  <header><span className="person-avatar">{initials(row.name)}</span><div><strong>{row.name}</strong><small>{row.title}</small></div><span className="tag">{row.focus}</span></header>
+                  <header><span className="person-avatar">{initials(row.name)}</span><div><strong>{personLink(row.name, row.source)}</strong><small>{row.title}</small></div><span className="tag">{row.focus}</span></header>
                   {row.candidates[0] ? <div className="email-primary"><strong>{row.candidates[0].email}</strong><small>{formatLabel(row.candidates[0])}</small></div> : <div className="email-primary"><strong>No address yet</strong><small>Company email domain unresolved</small></div>}
                   {row.candidates.length > 1 && <details className="pattern-detail"><summary>All {row.candidates.length} possible formats</summary><ul className="email-list">{row.candidates.map(c => <li key={c.email}><span>{c.email}</span><span>{c.percentage != null ? `${c.percentage}%` : c.format}</span></li>)}</ul></details>}
                   {row.association && <details className="pattern-detail"><summary>Why this profile matched</summary><p>{row.association.text}</p><p>{row.association.basis} · current employment is not independently confirmed.</p></details>}
@@ -207,7 +207,7 @@ export default function Home() {
                     const latest = person.attempts.at(-1)!;
                     const next = person.contact && latest.status === 'bounced' ? nextCandidate(person.contact, data.history) as Candidate | null : null;
                     return <div className="person-block" key={person.key}>
-                      <div className="person-head"><span className="person-avatar">{initials(person.name)}</span><div><strong>{person.name}</strong><small>{person.contact?.title || (latest.test ? 'Test send' : '')}</small></div><span className={'status ' + latest.status}>{attemptLabel(latest)}</span></div>
+                      <div className="person-head"><span className="person-avatar">{initials(person.name)}</span><div><strong>{personLink(person.name, person.contact?.source)}</strong><small>{person.contact?.title || (latest.test ? 'Test send' : '')}</small></div><span className={'status ' + latest.status}>{attemptLabel(latest)}</span></div>
                       <ol className="attempts">{person.attempts.map((h, i) => <li key={h.id} className={h.status}><details><summary><span className="attempt-no">{i + 1}</span><span className="attempt-to">{h.to}</span><span className={'status ' + h.status}>{attemptLabel(h)}</span><small>{new Date(h.date).toLocaleString()}{h.attachment ? ' · 📎' : ''}{h.bounce ? ` · ${h.bounce.subject}` : ''}</small></summary><h3>{h.subject}</h3><pre>{h.message}</pre></details></li>)}</ol>
                       {latest.status === 'bounced' && person.contact && (next ? <div className="cta-row" style={{ marginTop: 8 }}><button className="primary" disabled={!!busy} onClick={() => setFlow({ mode: 'default', ids: [person.contact!.id] })}>Retry with next address · {next.email}</button><span className="hint" style={{ margin: 0 }}>{next.format}{next.percentage != null ? ` · ${next.percentage}% at this company` : ''} · you authorize before it sends</span></div> : <p className="hint">Every address for this person has bounced; nothing left to try automatically.</p>)}
                       {latest.status === 'uncertain' && <p className="hint">Gmail did not confirm this one. Check Gmail Sent before sending again.</p>}
