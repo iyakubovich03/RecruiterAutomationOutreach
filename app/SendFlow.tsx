@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { automaticRecipients } from './outreach.mjs';
 
-export type Batch = { id: string; from: string; status: string; attachment?: string | null; retryOf?: string; rows: { id: string; to: string; name: string; source?: string; subject: string; message: string; status: string; error?: string; edited?: boolean }[] };
+export type Batch = { id: string; from: string; status: string; attachment?: string | null; retryOf?: string; removed?: { id: string; name: string; to: string }[]; rows: { id: string; to: string; name: string; source?: string; subject: string; message: string; status: string; error?: string; edited?: boolean }[] };
 type Draft = { subject: string; message: string };
 export type Resume = { filename: string; type: string; size: number; savedAt: string };
 export type RunPerson = { id: string; name: string; title: string; source?: string; attempts: { to: string; format: string; status: string; date: string; bounce: { at: string; subject: string } | null }[]; outcome: string };
@@ -106,11 +106,18 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
     finally { setBusy(''); }
   }
   // Every email can be rewritten in place before it is authorized; the app validates each edit like a generated one.
+  // Dropping a person from the draft happens on the server so what is authorized is exactly what is shown.
+  async function removeRow(target: Batch, row: Batch['rows'][number], apply: (batch: Batch) => void) {
+    setBusy('remove'); setError('');
+    try { const result = await post('batch/remove', { batchId: target.id, contactId: row.id }); if (result.batch) apply(result.batch); setEdits(current => { const rest = { ...current }; delete rest[row.id + '|' + row.to]; return rest; }); setAuthorized(false); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not remove.'); }
+    finally { setBusy(''); }
+  }
   const rowDetails = (target: Batch, attachment: string | null | undefined, apply: (batch: Batch) => void) => target.rows.map((row, i) => {
     const key = row.id + '|' + row.to, draft = edits[key] || { subject: row.subject, message: row.message }, dirty = !!edits[key];
     const change = (patch: Partial<Draft>) => setEdits(current => { const next = { ...current[key] || { subject: row.subject, message: row.message }, ...patch }; if (next.subject === row.subject && next.message === row.message) { const rest = { ...current }; delete rest[key]; return rest; } return { ...current, [key]: next }; });
     return <details className="history-item" key={key} open={i === 0 || row.edited}>
-      <summary><span><strong>{personLink(row.name, row.source)}</strong><small>{row.to} · {row.subject}{attachment ? ' · 📎' : ''}</small></span><span className={'tag' + (dirty ? ' warn' : row.edited ? ' green' : '')}>{dirty ? 'Unsaved' : row.edited ? 'Edited' : 'Ready'}</span></summary>
+      <summary><span><strong>{personLink(row.name, row.source)}</strong><small>{row.to} · {row.subject}{attachment ? ' · 📎' : ''}</small></span>{target.rows.length > 1 && <button className="remove-person" title={`Leave ${row.name} out`} aria-label={`Remove ${row.name}`} disabled={!!busy} onClick={e => { e.preventDefault(); void removeRow(target, row, apply); }}>×</button>}<span className={'tag' + (dirty ? ' warn' : row.edited ? ' green' : '')}>{dirty ? 'Unsaved' : row.edited ? 'Edited' : 'Ready'}</span></summary>
       <label className="field">Subject<input maxLength={200} value={draft.subject} disabled={!!busy} onChange={e => change({ subject: e.target.value })} /></label>
       <label className="field">Message<textarea rows={10} maxLength={20000} value={draft.message} disabled={!!busy} onChange={e => change({ message: e.target.value })} /></label>
       {dirty && <div className="edit-row"><span className="hint">Save this email before authorizing the batch.</span><button className="secondary" disabled={!!busy} onClick={() => setEdits(current => { const rest = { ...current }; delete rest[key]; return rest; })}>Discard</button><button className="primary" disabled={!!busy} onClick={() => saveRow(target, row, apply)}>{busy === 'edit' ? 'Saving…' : 'Save changes'}</button></div>}
@@ -170,8 +177,9 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
           {busy === 'send' && <p className="hint"><span className="spinner" /> Starting the run…</p>}
           {batch && busy !== 'send' && <>
             <div className="alert" style={{ background: '#f3f6ed', borderColor: '#d2e3c5', color: '#3f5f44' }}>{bounceDetection ? <><strong>How this run works:</strong> {probeName} is emailed first at the top-ranked format. If that bounces (usually within seconds; 60s at most), the next format is tried on {probeName}. Once a format gets through, everyone else is emailed at that format, and anyone who bounces is retried at their next address (up to 3 tries each). It keeps going even if you close this window.</> : <>Bounce detection is off, so everyone is emailed once at their top address. Reconnect Gmail to enable format verification.</>}</div>
-            <p className="hint">Each recruiter gets a separate email with {batch.attachment} attached. Expand any row to read exactly what will be sent, and change anything you like.</p>
+            <p className="hint">Each recruiter gets a separate email with {batch.attachment} attached. Expand any row to read exactly what will be sent, change anything you like, or remove a person with ×.</p>
             {rowDetails(batch, batch.attachment, setBatch)}
+            {batch.removed?.length ? <p className="hint">Left out: {batch.removed.map(r => r.name).join(', ')}.</p> : null}
             <label className="confirm" style={{ marginTop: 20 }}><input type="checkbox" checked={authorized && !unsaved} disabled={!!busy || unsaved} onChange={e => setAuthorized(e.target.checked)} />I authorize this run: up to {batch.rows.length} recruiters, up to 3 addresses each, with {batch.attachment} attached. The addresses are best guesses and are not verified.{unsaved ? ' Save or discard your edits first.' : ''}</label>
             <div className="cta-row"><button className="secondary" disabled={!!busy} onClick={onClose}>Cancel</button><button className="primary" disabled={!authorized || unsaved || !!busy} onClick={() => startRun(batch)}>Authorize & start the run ↗</button></div>
           </>}

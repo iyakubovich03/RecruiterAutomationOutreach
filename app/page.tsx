@@ -35,6 +35,10 @@ export default function Home() {
   const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState('');
   const [query, setQuery] = useState(''); const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [flow, setFlow] = useState<{ mode: 'default' | 'custom'; ids: string[]; runId?: string } | null>(null);
+  // Recruiters removed from the current search result (by LinkedIn URL); they are left out of the send and can be restored.
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const kept = discovery ? discovery.results.filter(r => !removed.has(r.source)) : [];
+  const dropped = discovery ? discovery.results.filter(r => removed.has(r.source)) : [];
   const [template, setTemplate] = useState<Template>({ subject: '', message: '' });
   const [testSend, setTestSend] = useState({ to: '', company: '', name: 'Jane Doe', attachResume: true });
   const [showToken, setShowToken] = useState(false);
@@ -66,7 +70,7 @@ export default function Home() {
   async function run(label: string, fn: () => Promise<void>) { if (busy) return; setBusy(label); setError(''); setNotice(''); try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); } finally { setBusy(''); } }
   async function searchCompany(fresh = false) {
     await run('Finding recruiters', async () => {
-      setDiscovery(null); setFlow(null);
+      setDiscovery(null); setFlow(null); setRemoved(new Set());
       const result = await post('discover', { company: query, fresh }) as Discovery;
       setDiscovery(result); await refresh();
       if (!result.results.length) setNotice('No recruiters were found. The Requests tab shows what each search returned.');
@@ -75,7 +79,7 @@ export default function Home() {
   async function startSend(mode: 'default' | 'custom') {
     if (!discovery) return;
     await run('Preparing recipients', async () => {
-      const result = await post('discover/save', { sources: discovery.results.map(r => r.source), domain: discovery.domain });
+      const result = await post('discover/save', { sources: kept.map(r => r.source), domain: discovery.domain });
       await refresh(); setFlow({ mode, ids: result.contactIds || [] });
     });
   }
@@ -137,15 +141,17 @@ export default function Home() {
                 })}</ul>
               </div> : null}
               {discovery.results.length === 0 ? <div className="empty"><span className="empty-icon">↗</span><h3>No recruiters found</h3><p>Try the company’s common short name, or open Requests to see exactly what the search returned.</p><button className="secondary" onClick={() => void searchCompany(true)}>Search again</button></div> : <>
-                <div className="profile-grid">{discovery.results.map(row => <article className="profile-card" key={row.source}>
-                  <header><span className="person-avatar">{initials(row.name)}</span><div><strong>{personLink(row.name, row.source)}</strong><small>{row.title}</small></div><span className="tag">{row.focus}</span></header>
+                <div className="profile-grid">{kept.map(row => <article className="profile-card" key={row.source}>
+                  <header><span className="person-avatar">{initials(row.name)}</span><div><strong>{personLink(row.name, row.source)}</strong><small>{row.title}</small></div><span className="tag">{row.focus}</span><button className="remove-person" title={`Leave ${row.name} out of this send`} aria-label={`Remove ${row.name}`} disabled={!!busy} onClick={() => setRemoved(current => new Set(current).add(row.source))}>×</button></header>
                   {row.candidates[0] ? <div className="email-primary"><strong>{row.candidates[0].email}</strong><small>{formatLabel(row.candidates[0])}</small></div> : <div className="email-primary"><strong>No address yet</strong><small>Company email domain unresolved</small></div>}
                   {row.candidates.length > 1 && <details className="pattern-detail"><summary>All {row.candidates.length} possible formats</summary><ul className="email-list">{row.candidates.map(c => <li key={c.email}><span>{c.email}</span><span>{c.percentage != null ? `${c.percentage}%` : c.format}</span></li>)}</ul></details>}
                   {row.association && <details className="pattern-detail"><summary>Why this profile matched</summary><p>{row.association.text}</p><p>{row.association.basis} · current employment is not independently confirmed.</p></details>}
                   <footer><a href={row.source} target="_blank" rel="noreferrer">LinkedIn profile ↗</a><span>{row.candidates.length ? `${row.candidates.length} format${row.candidates.length === 1 ? '' : 's'}` : ''}</span></footer>
                 </article>)}</div>
-                {discovery.domain && <div className="cta-row">
-                  <button className="primary" disabled={!!busy || !hasDefault} onClick={() => void startSend('default')}>Send my default email to all {discovery.results.length} →</button>
+                {dropped.length > 0 && <div className="removed-people"><span>Left out of this send:</span>{dropped.map(row => <button key={row.source} className="plain" disabled={!!busy} onClick={() => setRemoved(current => { const next = new Set(current); next.delete(row.source); return next; })}>{row.name} · restore</button>)}</div>}
+                {kept.length === 0 && <p className="hint">Everyone has been removed. Restore at least one recruiter to send.</p>}
+                {discovery.domain && kept.length > 0 && <div className="cta-row">
+                  <button className="primary" disabled={!!busy || !hasDefault} onClick={() => void startSend('default')}>Send my default email to {kept.length === discovery.results.length ? `all ${kept.length}` : `these ${kept.length}`} →</button>
                   <button className="secondary" disabled={!!busy} onClick={() => void startSend('custom')}>Write a custom message</button>
                   <span className="hint" style={{ margin: 0 }}>{hasDefault ? 'You review every email and authorize before anything is sent.' : <>Set a default email first in <button className="plain" onClick={() => setView('template')}>Default email</button>.</>}</span>
                 </div>}

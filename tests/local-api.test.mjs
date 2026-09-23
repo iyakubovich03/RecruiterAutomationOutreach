@@ -559,3 +559,16 @@ test('RocketReach may name a domain on the search-result blocklist (Google → g
   await freemail.call('status');const rejected=await freemail.call('discover',{company:'Google'});
   assert.equal(rejected.body.domain,'');assert.ok(rejected.body.diagnostics.events.some(e=>/gmail\.com is a personal email provider/.test(e.detail)));
 });
+test('a reviewer can drop a person from a draft batch, but not the last one, and the send excludes them',async t=>{
+  const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.endsWith('/messages/send')){sent.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString().match(/^To: (.+)$/m)[1]);return Response.json({id:'g'+sent.length});}if(u.endsWith('/profile'))return Response.json({historyId:'1'});return new Response('Blocked',{status:403});});
+  const h=harness(batchSeed());await h.call('status');
+  const prepared=await h.call('batch/prepare',batchBody);const batch=prepared.body.batch;assert.equal(batch.rows.length,2);
+  assert.equal((await h.call('batch/remove',{batchId:batch.id,contactId:'nobody'})).status,400);
+  const removed=await h.call('batch/remove',{batchId:batch.id,contactId:'jane'});assert.equal(removed.status,200,JSON.stringify(removed.body));
+  assert.deepEqual(removed.body.batch.rows.map(r=>r.id),['alex']);assert.deepEqual(removed.body.batch.removed.map(r=>r.name),['Jane Smith']);
+  const last=await h.call('batch/remove',{batchId:batch.id,contactId:'alex'});assert.equal(last.status,400);assert.match(last.body.error,/only recruiter left/);
+  const done=await h.call('batch/send',{batchId:batch.id,confirmed:true});assert.equal(done.body.batch.status,'complete');assert.deepEqual(sent,['alex@example.com']);
+  // The extension may only touch its own batches.
+  assert.equal((await h.call('extension/remove',{batchId:batch.id,contactId:'alex'},{'x-extension-token':'nope'})).status,403);
+});

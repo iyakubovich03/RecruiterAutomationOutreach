@@ -423,6 +423,18 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
     for(const {row,subject,message} of changes){row.subject=subject;row.message=message;row.edited=subject!==personalize(batch.template.subject,{name:row.name,company:db.contacts.find(c=>c.id===row.id)?.company||''},row.to)||message!==personalize(batch.template.message,{name:row.name,company:db.contacts.find(c=>c.id===row.id)?.company||''},row.to);}
     save();return publicBatch(batch);
   }
+  // A reviewer may drop a person from a draft batch; the last row cannot go (cancel the batch instead), and nothing else about the batch changes.
+  function removeFromBatch(owner,batchId,contactId) {
+    const batch=db.batches.find(b=>b.id===batchId&&b.owner===owner);
+    if(!batch||batch.status!=='draft')throw fail('This batch is unavailable or has already been started. Review the batch again.',409);
+    if(Date.now()-Date.parse(batch.created)>600000)throw fail('The preview expired. Review the batch again.');
+    const index=batch.rows.findIndex(r=>r.id===contactId);
+    if(index===-1)throw fail('That person is not part of this batch.');
+    if(batch.rows.length===1)throw fail('This is the only recruiter left; cancel instead of removing them.');
+    const [removed]=batch.rows.splice(index,1);
+    batch.removed=[...(batch.removed||[]),{id:removed.id,name:removed.name,to:removed.to}];
+    save();return publicBatch(batch);
+  }
   async function sendBatch(owner,batchId,confirmed) {
     if(confirmed!==true)throw fail('Review and confirm the batch before sending.');
     if(sending)throw fail('A send is already in progress.',409);
@@ -615,6 +627,9 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       if (path === '/api/extension/update' && req.method === 'POST') {
         return json({batch:updateBatch('extension',String(body.batchId||''),body.rows)});
       }
+      if (path === '/api/extension/remove' && req.method === 'POST') {
+        return json({batch:removeFromBatch('extension',String(body.batchId||''),String(body.contactId||''))});
+      }
       if (path === '/api/extension/send' && req.method === 'POST') {
         return json({batch:await sendBatch('extension',String(body.batchId||''),body.confirmed===true)});
       }
@@ -734,6 +749,9 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       }
       if (path === '/api/batch/update' && req.method === 'POST') {
         return json({batch:updateBatch(sid,String(body.batchId||''),body.rows)});
+      }
+      if (path === '/api/batch/remove' && req.method === 'POST') {
+        return json({batch:removeFromBatch(sid,String(body.batchId||''),String(body.contactId||''))});
       }
       if (path === '/api/batch/send' && req.method === 'POST') {
         return json({batch:await sendBatch(sid,String(body.batchId||''),body.confirmed===true)});

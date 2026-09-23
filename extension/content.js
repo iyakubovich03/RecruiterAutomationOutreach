@@ -46,6 +46,7 @@
     p{margin:6px 0;color:#4f5f4a}.hint{font-size:11px;color:#748078}
     input[type=text]{width:100%;border:1px solid #dde3d8;border-radius:6px;padding:9px 10px;background:#fff;font-size:13px}
     .row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+    .remove-person{float:right;margin-left:8px;width:22px;height:22px;border:1px solid #d9dfd4;border-radius:50%;background:#fff;color:#748078;font-size:14px;line-height:1;cursor:pointer}.remove-person:hover{color:#8f3a2a;border-color:#e2c2b8;background:#fff6f3}
     .person-link{color:inherit;text-decoration:none;border-bottom:1px dotted #9fb08f}.person-link:hover{color:#285740;border-bottom-style:solid}
     .btn{border:0;border-radius:7px;padding:10px 14px;font-weight:600;cursor:pointer;background:#fff;border:1px solid #d9dfd4;color:#42513c}
     .btn.primary{background:#285740;color:#fff;border-color:#285740}.btn.danger{color:#8f3a2a;border-color:#e2c2b8;background:#fff6f3}.btn:disabled{opacity:.45;cursor:not-allowed}
@@ -89,7 +90,8 @@
         if (result.error) { status.textContent = result.error; status.className = 'hint bad'; save.removeAttribute('disabled'); return; }
         dirty.delete(key); onDirty(dirty.size > 0); onSaved(result.batch);
       });
-      const d = h('details', {}, h('summary', {}, h('strong', {}, personLink(row.name, row.source)), ` · ${row.to} · 📎`, row.edited ? h('span', { class: 'edited' }, 'EDITED') : null),
+      const remove = batch.rows.length > 1 ? h('button', { class: 'remove-person', title: `Leave ${row.name} out`, onclick: async e => { e.preventDefault(); remove.disabled = true; const result = await ask({ type: 'remove', batchId: batch.id, contactId: row.id }); if (result.error) { status.textContent = result.error; status.className = 'hint bad'; remove.disabled = false; } else { dirty.delete(key); onDirty(dirty.size > 0); onSaved(result.batch); } } }, '×') : null;
+      const d = h('details', {}, h('summary', {}, h('strong', {}, personLink(row.name, row.source)), ` · ${row.to} · 📎`, row.edited ? h('span', { class: 'edited' }, 'EDITED') : null, remove),
         h('label', { class: 'field' }, 'Subject', subject), h('label', { class: 'field' }, 'Message', message), h('div', { class: 'edit-row' }, status, discard, save));
       if (i === 0 || row.edited) d.setAttribute('open', '');
       return d;
