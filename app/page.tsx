@@ -76,6 +76,11 @@ export default function Home() {
       if (!result.results.length) setNotice('No recruiters were found. The Requests tab shows what each search returned.');
     });
   }
+  // Empties the Find page (locally and on the server, so a reload stays empty). Diagnostics stay under Requests.
+  async function clearResults() {
+    setDiscovery(null); setQuery(''); setRemoved(new Set());
+    try { await post('discover/clear'); } catch { /* the page is already clear; the server copy expires on the next search */ }
+  }
   async function startSend(mode: 'default' | 'custom') {
     if (!discovery) return;
     await run('Preparing recipients', async () => {
@@ -126,7 +131,7 @@ export default function Home() {
             {data.activeRun && <section className="panel"><div className="section-heading"><div><div className="eyebrow">{data.activeRun.status === 'running' ? 'RUN IN PROGRESS' : data.activeRun.status === 'complete' ? 'LAST RUN' : data.activeRun.stoppedBy ? 'RUN STOPPED' : 'RUN PAUSED'} · {data.activeRun.company}</div><h2 style={{ marginTop: 6 }}>{runHeadline(data.activeRun)}</h2><p>{data.activeRun.summary.reached} reached · {data.activeRun.summary.watching + data.activeRun.summary.retrying + data.activeRun.summary.queued} in progress · {data.activeRun.summary.exhausted} exhausted{data.activeRun.error ? ` · ${data.activeRun.error}` : ''}</p></div><div className="button-row">{data.activeRun.status === 'running' && stopArmed && <><button className="primary danger" disabled={!!busy} onClick={() => void stopActiveRun()}>{busy === 'Stopping' ? 'Stopping…' : 'Yes, stop now — send nothing more'}</button><button className="secondary" onClick={() => setStopArmed(false)}>Keep going</button></>}{data.activeRun.status === 'running' && !stopArmed && <button className="secondary danger" disabled={!!busy} onClick={() => void stopActiveRun()}>Stop sending</button>}{!stopArmed && <button className={data.activeRun.status === 'complete' ? 'secondary' : 'primary'} onClick={() => setFlow({ mode: 'default', ids: [], runId: data.activeRun!.id })}>{data.activeRun.status === 'running' ? 'Watch' : data.activeRun.status === 'complete' ? 'View' : 'Resume'}</button>}</div></div></section>}
             <SearchProgress running={searching} onViewRequests={() => setView('requests')} />
             {discovery && !searching && <section className="panel discovery-results">
-              <div className="section-heading"><div><h2>{discovery.results.length} recruiter{discovery.results.length === 1 ? '' : 's'} at {discovery.company}</h2><p>Found {new Date(discovery.searchedAt).toLocaleString()}. Nothing has been sent.</p></div><button className="plain" onClick={() => setView('requests')}>See the requests behind this →</button></div>
+              <div className="section-heading"><div><h2>{discovery.results.length} recruiter{discovery.results.length === 1 ? '' : 's'} at {discovery.company}</h2><p>Found {new Date(discovery.searchedAt).toLocaleString()}. Nothing has been sent.</p></div><div className="button-row"><button className="plain" onClick={() => setView('requests')}>See the requests behind this →</button><button className="remove-person" title="Clear these results" aria-label="Clear results" disabled={!!busy} onClick={() => void clearResults()}>×</button></div></div>
               <div className="results-head">
                 <span className={'chip' + (discovery.domain ? '' : ' warn')}>{discovery.domain ? `Email domain · ${discovery.domain}${discovery.domainResolution?.status && domainStatusLabel[discovery.domainResolution.status] ? ` · ${domainStatusLabel[discovery.domainResolution.status]}` : ''}` : 'Email domain not established'}</span>
                 {discovery.patternReport && <span className={'chip' + (discovery.patternReport.reportedPatterns?.length ? '' : ' warn')}>{discovery.patternReport.reportedPatterns?.length ? `${discovery.patternReport.reportedPatterns.length} RocketReach formats · most common ${topFormat?.format} (${topFormat?.percentage}%)` : 'No RocketReach formats · generic guesses'}</span>}
@@ -237,6 +242,6 @@ export default function Home() {
         </>}
       </div>
     </main>
-    {flow && data && <SendFlow mode={flow.mode} contactIds={flow.ids} runId={flow.runId || null} contacts={data.contacts} history={data.history} connected={data.connected} account={data.account} template={data.template} resume={data.resume} bounceDetection={data.bounceDetection} post={post} refresh={refresh} onClose={() => setFlow(null)} onConnect={() => { setFlow(null); setView('settings'); }} onResume={() => { setFlow(null); setView('template'); }} onSent={() => { setFlow(null); setView('history'); setNotice('Emails submitted to Gmail.'); }} />}
+    {flow && data && <SendFlow mode={flow.mode} contactIds={flow.ids} runId={flow.runId || null} contacts={data.contacts} history={data.history} connected={data.connected} account={data.account} template={data.template} resume={data.resume} bounceDetection={data.bounceDetection} post={post} refresh={refresh} onClose={() => setFlow(null)} onConnect={() => { setFlow(null); setView('settings'); }} onResume={() => { setFlow(null); setView('template'); }} onSent={() => { setFlow(null); void clearResults(); setView('history'); setNotice('Emails submitted to Gmail.'); }} />}
   </div>;
 }

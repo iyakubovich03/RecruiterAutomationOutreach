@@ -572,3 +572,17 @@ test('a reviewer can drop a person from a draft batch, but not the last one, and
   // The extension may only touch its own batches.
   assert.equal((await h.call('extension/remove',{batchId:batch.id,contactId:'alex'},{'x-extension-token':'nope'})).status,403);
 });
+test('the Find page result is cleared explicitly or once a run starts, so the next visit starts empty',async t=>{
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);
+    if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a></div>');
+    if(u.endsWith('/messages/send')){void opts;return Response.json({id:'g1'});}if(u.endsWith('/profile'))return Response.json({historyId:'1'});if(u.includes('/history?'))return Response.json({history:[]});
+    return new Response('Blocked',{status:403});});
+  const h=harness(batchSeed(),{findRocketReachCompany:async()=>null,discoverCompanyDomain:async()=>({domain:'example.com',status:'inferred',sources:[],message:'x'}),findPatterns:async d=>({domain:d,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]})});
+  await h.call('status');await h.call('discover',{company:'Example'});
+  assert.equal((await h.call('discover/last')).body.company,'Example');
+  assert.equal((await h.call('discover/clear',{})).body.cleared,true);assert.equal((await h.call('discover/last')).body,null);
+  await h.call('discover',{company:'Example'});assert.equal((await h.call('discover/last')).body.company,'Example');
+  const prepared=await h.call('batch/prepare',batchBody);
+  assert.equal((await h.call('run/start',{batchId:prepared.body.batch.id,confirmed:true})).status,200);
+  assert.equal((await h.call('discover/last')).body,null,'starting a run empties the Find page');
+});

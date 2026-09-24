@@ -262,6 +262,8 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
     const run = { id: randomUUID(), owner, company: first?.company || '', domain: primary, originalDomain: primary, probeDomain: primary, alternates, startedAt: new Date(now()).toISOString(), finishedAt: null, template: batch.template, attachResume: batch.attachResume, overrides, people: batch.rows.map(r => ({ id: r.id, name: r.name })), probeIndex: 0, stage: mode === 'verified' ? 'probe' : 'rest', mode, status: 'running', verifiedFormat: null, wave: null, log: [], error: null, draftBatchId: batch.id };
     batch.status = 'consumed';
     db.runs.unshift(run); if (db.runs.length > 50) db.runs.length = 50;
+    // The search that fed this run is done with: the Find page comes back empty, ready for the next company.
+    lastDiscovery = null; const owning = sessions.get(owner); if (owning) owning.discovery = null;
     runLog(run, 'ok', mode === 'verified' ? `Run started for ${run.people.length} recruiter${run.people.length === 1 ? '' : 's'}: verifying the email format on one person first.` : 'Run started without bounce detection: sending to everyone at their top address.');
     if (mode === 'verified' && run.alternates.length && domainLooksDead(primary)) runLog(run, 'partial', `Every earlier email to @${primary} bounced and none got through, so ${run.alternates[0]} is tested first with the same RocketReach formats.`);
     save(); return run;
@@ -639,6 +641,10 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       }
       if (path === '/api/discover/last' && req.method === 'GET') {
         return json(lastDiscovery || session.discovery || null);
+      }
+      // Clears the result shown on the Find page (the Requests tab keeps its diagnostics).
+      if (path === '/api/discover/clear' && req.method === 'POST') {
+        lastDiscovery=null;session.discovery=null;return json({cleared:true});
       }
       if (path === '/api/auth/start' && req.method === 'POST') {
         const cfg = config();
