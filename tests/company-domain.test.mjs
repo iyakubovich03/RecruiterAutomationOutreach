@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { companySearchResults, websiteEvidence, discoverCompanyDomain } from '../server/company-domain.mjs';
+import { excludedHost, looksLikeCompanySite, companySearchResults, websiteEvidence, discoverCompanyDomain } from '../server/company-domain.mjs';
 const result=(url,title)=>`<div class="result"><a class="result__a" href="${url}">${title}</a></div>`;
 const org=(name,email)=>`<script type="application/ld+json">${JSON.stringify({'@type':'Organization',name,email})}</script>`;
 test('finds a non-obvious company domain from search and published contact evidence',async()=>{
@@ -26,4 +26,14 @@ test('regional sites whose mail servers sit under another candidate domain resol
 test('returns ambiguity when similarly strong company evidence points to multiple domains',async()=>{
  const resolution=await discoverCompanyDomain('Example',{read:async url=>url.includes('duckduckgo')?result('https://example.com','Example')+result('https://example.org','Example'):org('Example'),mx:async()=>[{exchange:'mx.example.net'}]});
  assert.equal(resolution.status,'ambiguous');assert.equal(resolution.domain,'');
+});
+
+test('job boards that host application pages are never taken as the employer domain',()=>{
+  for(const host of ['www.levels.fyi','jobright.ai','app.welcometothejungle.com','jobs.lever.co'])assert.equal(excludedHost.test(host),true,host);
+  assert.equal(excludedHost.test('careers.coinbase.com'),false);
+});
+
+test('the application-page domain only counts when it looks like the company’s own site',()=>{
+  for(const [company,domain] of [['Scale AI','scale.com'],['Meta','meta.com.br'],['Datadog','datadoghq.com'],['Open AI','openai.com'],['JPMorgan Chase','jpmorganchase.com'],['Coinbase','coinbase.com']])assert.equal(looksLikeCompanySite(company,domain),true,`${company} ~ ${domain}`);
+  for(const [company,domain] of [['Meta','reddit.com'],['Meta','levels.fyi'],['Coinbase','www.reddit.com'],['Alphabet','google.com'],['Scale AI','x.ai']])assert.equal(looksLikeCompanySite(company,domain),false,`${company} !~ ${domain}`);
 });

@@ -8,7 +8,18 @@ import { parseSearchHtml, searchWeb } from './search.mjs';
 const normalize = value => String(value || '').toLowerCase().replace(/\b(incorporated|inc|corporation|corp|limited|ltd|llc)\b/g,'').replace(/[^\p{L}\p{N}]/gu,'');
 // Never a company's own mail domain, whatever source names it.
 export const freemailHost = /(^|\.)(gmail\.com|googlemail\.com|outlook\.com|hotmail\.com|live\.com|yahoo\.com|icloud\.com|me\.com|aol\.com|proton\.me|protonmail\.com)$/i;
-export const excludedHost = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|jobvite\.com|taleo\.net|successfactors\.com|bamboohr\.com|breezy\.hr|workable\.com|wellfound\.com|ziprecruiter\.com|monster\.com|dice\.com|builtin\.com|simplify\.jobs|google\.com|gstatic\.com|googleapis\.com|cloudflare\.com|w3\.org|apps\.apple\.com|play\.google\.com|linkedin\.com|facebook\.com|instagram\.com|wikipedia\.org|crunchbase\.com|zoominfo\.com|rocketreach\.co|indeed\.com|glassdoor\.com|youtube\.com|x\.com|twitter\.com|duckduckgo\.com|bing\.com|gmail\.com|outlook\.com|yahoo\.com)$/i;
+// Does this domain plausibly belong to the named company? "scale.com" for Scale AI, "datadoghq.com" for Datadog,
+// "meta.com.br" for Meta; never "reddit.com" for Meta just because that was the open tab. Used to vet the
+// application-page hint, which would otherwise win over every other source simply by having mail servers.
+const GENERIC_WORDS = /^(?:inc|llc|ltd|plc|corp|corporation|company|co|the|and|of|group|labs|technologies|technology|tech|ai|io|software|systems|holdings|global|international)$/;
+export function looksLikeCompanySite(company, domain) {
+  const label = String(domain || '').toLowerCase().split('.')[0].replace(/[^a-z0-9]/g, '');
+  if (label.length < 3) return false;
+  const words = String(company || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !GENERIC_WORDS.test(w));
+  const joined = String(company || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return words.some(w => label.includes(w)) || (joined.length >= 3 && label.includes(joined)) || (joined.length >= 4 && joined.includes(label));
+}
+export const excludedHost = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|jobvite\.com|taleo\.net|successfactors\.com|bamboohr\.com|breezy\.hr|workable\.com|wellfound\.com|ziprecruiter\.com|monster\.com|dice\.com|builtin\.com|simplify\.jobs|levels\.fyi|jobright\.ai|welcometothejungle\.com|otta\.com|workatastartup\.com|ycombinator\.com|weworkremotely\.com|remoteok\.com|hiring\.cafe|joinhandshake\.com|ripplematch\.com|untapped\.io|google\.com|gstatic\.com|googleapis\.com|cloudflare\.com|w3\.org|apps\.apple\.com|play\.google\.com|linkedin\.com|facebook\.com|instagram\.com|wikipedia\.org|crunchbase\.com|zoominfo\.com|rocketreach\.co|indeed\.com|glassdoor\.com|youtube\.com|x\.com|twitter\.com|duckduckgo\.com|bing\.com|gmail\.com|outlook\.com|yahoo\.com)$/i;
 const excluded = /(^|\.)(linkedin\.com|facebook\.com|instagram\.com|wikipedia\.org|crunchbase\.com|zoominfo\.com|rocketreach\.co|indeed\.com|glassdoor\.com|youtube\.com|x\.com|twitter\.com|duckduckgo\.com|bing\.com|gmail\.com|outlook\.com|yahoo\.com)$/i;
 function companyRows(rows) {
  const seen=new Set();

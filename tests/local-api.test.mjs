@@ -185,6 +185,19 @@ test('extension preview runs the pipeline, always attaches the resume, and sends
   data.resume=null;const noResume=harness(data);const t2=(await noResume.call('status')).body.extensionToken;
   assert.equal((await noResume.call('extension/preview',{company:'Example'},{'x-extension-token':t2})).status,409);
 });
+test('a country edition of the employer site defers to RocketReach’s global domain and stays as a fallback',async t=>{
+  t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/riley-dawson">Riley Dawson - Senior Recruiting Manager at Meta | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
+  const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}'};data.resume={filename:'r.pdf',type:'application/pdf',size:5,savedAt:'2026-09-17T00:00:00.000Z'};
+  const mx=async domain=>['meta.com.br','meta.com','meta.co.uk'].includes(domain)?[{exchange:'mx.'+domain}]:[];
+  const rocket=async()=>({domain:'meta.com',source:'https://rocketreach.co/meta-email-format',patterns:[]});
+  const h=harness(data,{discoverCompanyDomain:async()=>assert.fail('no website search needed'),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}),findRocketReachCompany:rocket,resolveMx:mx});
+  writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7');
+  const ext={'x-extension-token':(await h.call('status')).body.extensionToken};
+  const edition=await h.call('extension/preview',{company:'Meta',siteHint:'www.meta.com.br',pageUrl:'https://www.meta.com.br/careers/thanks'},ext);
+  assert.equal(edition.status,200,JSON.stringify(edition.body));assert.equal(edition.body.discovery.domain,'meta.com');assert.match(edition.body.discovery.domainMessage,/country edition/);
+  assert.equal(edition.body.batch.rows[0].to,'riley.dawson@meta.com');
+  const contact=(await h.call('status')).body.contacts.find(c=>c.name==='Riley Dawson');assert.deepEqual(contact.alternateDomains,['meta.com.br']);
+});
 test('extension preview uses the application page domain when it has mail servers, and the profiles’ spelling of the company',async t=>{
   t.mock.method(globalThis,'fetch',async url=>String(url).includes('duckduckgo.com/html')?new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>'):new Response('Blocked',{status:403}));
   const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}'};data.resume={filename:'r.pdf',type:'application/pdf',size:5,savedAt:'2026-09-17T00:00:00.000Z'};
@@ -200,6 +213,11 @@ test('extension preview uses the application page domain when it has mail server
   assert.deepEqual(searched,['Scale AI']);assert.equal(atsHint.body.discovery.domain,'scale.com');
   const noMail=await h.call('extension/preview',{company:'Scaleai',fresh:true,siteHint:'nomail.example'},ext);
   assert.equal(noMail.status,200);assert.equal(searched.length,2);
+  // An unrelated open tab (searching from reddit.com) is never the company's domain, not even as a run fallback.
+  const unrelated=await h.call('extension/preview',{company:'Scaleai',fresh:true,siteHint:'reddit.com',pageUrl:'https://www.reddit.com/r/cscareerquestions/'},ext);
+  assert.equal(unrelated.status,200,JSON.stringify(unrelated.body));assert.equal(unrelated.body.discovery.domain,'scale.com');assert.equal(searched.length,3);
+  assert.doesNotMatch(unrelated.body.discovery.domainMessage,/application page/);
+  assert.ok(!(await h.call('status')).body.contacts.some(c=>(c.alternateDomains||[]).includes('reddit.com')));
   assert.ok(atsHint.body.discovery.results.length>=1);
 });
 test('re-searching a company refreshes already-saved recruiters with the corrected company name, domain, and addresses',async t=>{
@@ -466,6 +484,37 @@ test('extension batches are edited through the extension route only',async t=>{
  assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.batch.rows[0].message,'Hi Jane, edited in the extension panel.');assert.equal(edited.body.batch.rows[0].subject,'Roles at Example');
  const sent=await h.call('extension/send',{batchId:preview.body.batch.id,confirmed:true},ext);assert.equal(sent.status,200,JSON.stringify(sent.body));
  assert.equal(part(messages[0],'text/plain'),'Hi Jane, edited in the extension panel.');
+});
+test('the extension rewrites every email in a batch at once and can save it as the default',async t=>{
+ const messages=[];
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a><div class="result__snippet">Recruiter at Example</div></div>');if(u.includes('gmail/v1/users/me/messages/send')){messages.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString());return Response.json({id:'gmail-1'});}return new Response('Blocked',{status:403});});
+ const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}, my resume is attached.'};data.resume={filename:'Resume.pdf',type:'application/pdf',size:15,savedAt:'2026-09-17T00:00:00.000Z'};
+ const h=harness(data,{discoverCompanyDomain:async()=>({domain:'example.com',status:'published',sources:[],message:'Published'}),findPatterns:async domain=>({domain,checkedAt:new Date().toISOString(),reportedPatterns:[],sources:[],warnings:[]}),findRocketReachCompany:async()=>null});
+ writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7 resume');
+ const token=(await h.call('status')).body.extensionToken;const ext={'x-extension-token':token};
+ const preview=await h.call('extension/preview',{company:'Example'},ext);assert.equal(preview.status,200,JSON.stringify(preview.body));const row=preview.body.batch.rows[0];
+ // A per-row edit is superseded by the batch-wide rewrite.
+ await h.call('extension/update',{batchId:preview.body.batch.id,rows:[{id:row.id,to:row.to,message:'one-off edit'}]},ext);
+ assert.equal((await h.call('extension/update-all',{batchId:preview.body.batch.id,template:{subject:'',message:'x'}},ext)).status,400);
+ assert.equal((await h.call('extension/update-all',{batchId:preview.body.batch.id,template:{subject:'two\nlines',message:'x'}},ext)).status,400);
+ const all=await h.call('extension/update-all',{batchId:preview.body.batch.id,template:{subject:'Interest in {company} internships',message:'Hello {first_name},\n\nNew text for everyone.'},saveDefault:true},ext);
+ assert.equal(all.status,200,JSON.stringify(all.body));
+ assert.equal(all.body.batch.rows[0].subject,'Interest in Example internships');assert.equal(all.body.batch.rows[0].message,'Hello Jane,\n\nNew text for everyone.');assert.equal(all.body.batch.rows[0].edited,false);
+ assert.deepEqual(all.body.batch.template,{subject:'Interest in {company} internships',message:'Hello {first_name},\n\nNew text for everyone.'});
+ assert.deepEqual((await h.call('status')).body.template,all.body.batch.template);
+ const sent=await h.call('extension/send',{batchId:preview.body.batch.id,confirmed:true},ext);assert.equal(sent.status,200,JSON.stringify(sent.body));
+ assert.equal(part(messages[0],'text/plain'),'Hello Jane,\n\nNew text for everyone.');
+ assert.equal((await h.call('extension/update-all',{batchId:preview.body.batch.id,template:{subject:'late',message:'late'}},ext)).status,409);
+});
+test('a paused run older than a day no longer re-opens as the current run',async()=>{
+  let clock=Date.parse('2026-09-27T12:00:00.000Z');
+  const stale={id:'stale',owner:'extension',company:'Scale AI',startedAt:'2026-09-18T03:04:33.692Z',finishedAt:null,template:{subject:'s',message:'m'},attachResume:false,overrides:{},people:[],probeIndex:0,stage:'probe',mode:'verified',status:'stopped',verifiedFormat:null,wave:null,log:[{at:'2026-09-18T03:04:43.706Z',status:'error',detail:'Outreach already exists.'}],error:'Outreach already exists.',draftBatchId:'x'};
+  const data=batchSeed();data.runs=[stale];
+  const h=harness(data,{now:()=>clock,findRocketReachCompany:async()=>null});await h.call('status');
+  assert.equal((await h.call('run/active')).body.run,null);
+  assert.equal((await h.call('status')).body.activeRun,null);
+  clock=Date.parse('2026-09-18T20:00:00.000Z');
+  assert.equal((await h.call('run/active')).body.run.id,'stale');
 });
 test('a run moves on the moment a probe bounces instead of waiting out the watch window',async t=>{
   let clock=Date.now();const sent=[];let dsnFor=null;

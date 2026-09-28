@@ -31,6 +31,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'run-status': sendResponse(await api('/api/extension/run?id=' + encodeURIComponent(String(message.id || '')))); break;
       case 'run-active': sendResponse(await api('/api/extension/run/active')); break;
       case 'run-resume': sendResponse(await api('/api/extension/run/resume', { runId: String(message.id || '') })); break;
+      case 'update-all': sendResponse(await api('/api/extension/update-all', { batchId: String(message.batchId || ''), template: { subject: String(message.subject || ''), message: String(message.message || '') }, saveDefault: message.saveDefault === true })); break;
       case 'remove': sendResponse(await api('/api/extension/remove', { batchId: String(message.batchId || ''), contactId: String(message.contactId || '') })); break;
       case 'run-stop': sendResponse(await api('/api/extension/run/stop', { runId: String(message.id || '') })); break;
       case 'open-app': await chrome.tabs.create({ url: BASE + (message.path || '/') }); sendResponse({ ok: true }); break;

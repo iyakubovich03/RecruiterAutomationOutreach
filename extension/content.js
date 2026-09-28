@@ -10,7 +10,7 @@
 
   // ---------- page facts ----------
   // Job boards and ATSs never own the employer's email domain; the first outbound link that isn't one usually does.
-  const NOT_EMPLOYER = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|jobvite\.com|taleo\.net|successfactors\.com|bamboohr\.com|breezy\.hr|workable\.com|wellfound\.com|ziprecruiter\.com|monster\.com|dice\.com|builtin\.com|simplify\.jobs|linkedin\.com|facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|glassdoor\.com|indeed\.com|google\.com|gstatic\.com|googleapis\.com|cloudflare\.com|w3\.org|apps\.apple\.com|play\.google\.com|github\.com|medium\.com|tiktok\.com|vimeo\.com)$/i;
+  const NOT_EMPLOYER = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|jobvite\.com|taleo\.net|successfactors\.com|bamboohr\.com|breezy\.hr|workable\.com|wellfound\.com|ziprecruiter\.com|monster\.com|dice\.com|builtin\.com|simplify\.jobs|levels\.fyi|jobright\.ai|welcometothejungle\.com|otta\.com|workatastartup\.com|ycombinator\.com|weworkremotely\.com|remoteok\.com|hiring\.cafe|joinhandshake\.com|ripplematch\.com|untapped\.io|linkedin\.com|facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|glassdoor\.com|indeed\.com|google\.com|gstatic\.com|googleapis\.com|cloudflare\.com|w3\.org|apps\.apple\.com|play\.google\.com|github\.com|medium\.com|tiktok\.com|vimeo\.com)$/i;
   const registrable = host => { const labels = host.toLowerCase().split('.'); const keep = labels.length >= 3 && /^(?:co|com|org|net|ac|gov|edu)$/.test(labels.at(-2)) && labels.at(-1).length === 2 ? 3 : 2; return labels.slice(-keep).join('.'); };
   function siteHint() {
     if (!NOT_EMPLOYER.test(location.hostname)) return registrable(location.hostname);
@@ -55,6 +55,7 @@
     .chip{display:inline-block;font-size:11px;background:#f2f4ec;border:1px solid #e5e9de;border-radius:6px;padding:4px 8px;margin:4px 6px 4px 0;color:#4f5f4a}
     details{border-top:1px solid #e4e8e2;padding:8px 0}summary{cursor:pointer;font-size:12px}pre{white-space:pre-wrap;background:#fff;border-radius:6px;padding:12px;font:12px/1.6 inherit;margin:8px 0;max-height:220px;overflow:auto}
     .field{display:block;font-size:11px;color:#748078;margin:8px 0 0}.field input,.field textarea{display:block;width:100%;margin-top:4px;border:1px solid #dde3d8;border-radius:6px;padding:8px 10px;background:#fff;font:12px/1.55 inherit;color:#182821}.field textarea{min-height:150px;resize:vertical}
+    details.bulk{background:#f3f6ed;border:1px solid #d2e3c5;border-radius:8px;padding:10px 12px;margin:10px 0}details.bulk summary{font-size:13px}
     .edit-row{display:flex;gap:8px;align-items:center;margin-top:8px}.edit-row .hint{flex:1}.edited{font-size:10px;color:#3f6b48;font-weight:700;margin-left:6px}
     label.confirm{display:flex;gap:10px;align-items:flex-start;font-size:12px;color:#717d65;margin-top:12px}label.confirm input{margin-top:3px}
     .alert{background:#fff4ef;border:1px solid #eed4c5;color:#946246;border-radius:7px;padding:10px 12px;font-size:12px;margin:8px 0}
@@ -96,6 +97,29 @@
       if (i === 0 || row.edited) d.setAttribute('open', '');
       return d;
     });
+  }
+
+  // One edit for everyone: rewrite the batch's template and the app re-personalizes it for each recruiter.
+  // Ticking the box also saves it as the default email, so future companies get the new text too.
+  function bulkEditor(batch, onSaved, onDirty = () => {}) {
+    const subject = h('input', { type: 'text', value: batch.template.subject, maxlength: '200' }), message = h('textarea', { maxlength: '20000' }, batch.template.message);
+    const asDefault = h('input', { type: 'checkbox' });
+    const status = h('span', { class: 'hint' }), apply = h('button', { class: 'btn primary', disabled: '' }, 'Apply to everyone'), discard = h('button', { class: 'btn', disabled: '' }, 'Discard');
+    const changed = () => subject.value !== batch.template.subject || message.value !== batch.template.message;
+    const sync = () => { const on = changed(); apply.toggleAttribute('disabled', !on); discard.toggleAttribute('disabled', !on); status.textContent = on ? 'Unsaved changes' : ''; status.className = 'hint'; onDirty(on); };
+    subject.addEventListener('input', sync); message.addEventListener('input', sync);
+    discard.addEventListener('click', () => { subject.value = batch.template.subject; message.value = batch.template.message; sync(); });
+    apply.addEventListener('click', async () => {
+      apply.setAttribute('disabled', ''); status.textContent = 'Applying…';
+      const result = await ask({ type: 'update-all', batchId: batch.id, subject: subject.value, message: message.value, saveDefault: asDefault.checked });
+      if (result.error) { status.textContent = result.error; status.className = 'hint bad'; apply.removeAttribute('disabled'); return; }
+      onDirty(false); onSaved(result.batch, asDefault.checked);
+    });
+    return h('details', { class: 'bulk', open: '' }, h('summary', {}, h('strong', {}, '✎ Edit the email for everyone')),
+      h('p', { class: 'hint' }, 'Placeholders filled in per recruiter: {first_name} · {full_name} · {company} · {email}. Applying replaces any edits made to individual emails below.'),
+      h('label', { class: 'field' }, 'Subject', subject), h('label', { class: 'field' }, 'Message', message),
+      h('label', { class: 'confirm', style: 'margin-top:8px' }, asDefault, 'Also save this as my default email for future companies'),
+      h('div', { class: 'edit-row' }, status, discard, apply));
   }
 
   function showBadge(company) {
@@ -151,13 +175,14 @@
     }
     const authorize = h('input', { type: 'checkbox' });
     const sendButton = h('button', { class: 'btn primary', disabled: '' , onclick: () => startRun(batch) }, 'Authorize & start the run ↗');
-    let unsaved = false;
-    const syncSend = () => { if (authorize.checked && !unsaved) sendButton.removeAttribute('disabled'); else sendButton.setAttribute('disabled', ''); };
+    let rowsUnsaved = false, bulkUnsaved = false;
+    const syncSend = () => { const unsaved = rowsUnsaved || bulkUnsaved; authorize.disabled = unsaved; if (unsaved) authorize.checked = false; if (authorize.checked && !unsaved) sendButton.removeAttribute('disabled'); else sendButton.setAttribute('disabled', ''); };
     authorize.addEventListener('change', syncSend);
-    const rows = editableRows(batch, updated => showPreview({ ...result, batch: updated }), flag => { unsaved = flag; authorize.disabled = flag; if (flag) authorize.checked = false; syncSend(); });
+    const bulk = bulkEditor(batch, (updated, asDefault) => showPreview({ ...result, batch: updated, savedDefault: asDefault || result.savedDefault }), flag => { bulkUnsaved = flag; syncSend(); });
+    const rows = editableRows(batch, updated => showPreview({ ...result, batch: updated }), flag => { rowsUnsaved = flag; syncSend(); });
     const first = batch.rows[0]?.name, verified = !!state.status?.bounceDetection;
     const plan = h('div', { class: 'alert', style: 'background:#f3f6ed;border-color:#d2e3c5;color:#3f5f44' }, verified ? `How this run works: ${first} is emailed first at the top-ranked format. If that bounces (usually within seconds; 60s at most), the next format is tried on ${first}. Once a format gets through, everyone else is emailed at it, and anyone who bounces is retried at their next address (up to 3 tries each). It keeps going even if you close this panel.` : 'Bounce detection is off, so everyone is emailed once at their top address. Reconnect Gmail in the app to enable format verification.');
-    panelShell(`Email ${batch.rows.length} recruiter${batch.rows.length === 1 ? '' : 's'} at ${discovery.company}`, h('div', { class: 'eyebrow' }, 'STEP 2 · REVIEW, EDIT AND AUTHORIZE'), chips, people, plan, h('p', { class: 'hint' }, `Each recruiter gets a separate email with ${batch.attachment} attached. Expand a row to read it, and change anything you like; save each edit before authorizing.`), rows, h('label', { class: 'confirm' }, authorize, `I authorize this run: up to ${batch.rows.length} recruiters, up to 3 addresses each, with ${batch.attachment} attached. The addresses are best guesses and are not verified.`), h('div', { class: 'row' }, sendButton, h('button', { class: 'btn', onclick: hide }, 'Cancel')));
+    panelShell(`Email ${batch.rows.length} recruiter${batch.rows.length === 1 ? '' : 's'} at ${discovery.company}`, h('div', { class: 'eyebrow' }, 'STEP 2 · REVIEW, EDIT AND AUTHORIZE'), chips, people, plan, h('p', { class: 'hint' }, `Each recruiter gets a separate email with ${batch.attachment} attached. Change the text for everyone below, or expand a row to change one person's email; save edits before authorizing.`), result.savedDefault ? h('p', { class: 'hint ok' }, '✓ Saved as your default email for future companies.') : null, bulk, rows, h('label', { class: 'confirm' }, authorize, `I authorize this run: up to ${batch.rows.length} recruiters, up to 3 addresses each, with ${batch.attachment} attached. The addresses are best guesses and are not verified.`), h('div', { class: 'row' }, sendButton, h('button', { class: 'btn', onclick: hide }, 'Cancel')));
   }
   // ---------- verified run (server-owned; closing the panel never stops it) ----------
   let runTimer = null;

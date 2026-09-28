@@ -1,6 +1,6 @@
 import { createPatternCache } from './pattern-cache.mjs';
 import { buildBatch, outreachBlocked, personalize } from './batch.mjs';
-import { discoverCompanyDomain, excludedHost, freemailHost } from './company-domain.mjs';
+import { discoverCompanyDomain, excludedHost, freemailHost, looksLikeCompanySite } from './company-domain.mjs';
 import { findPatterns, rankCandidates } from './patterns.mjs';
 import { discoverRecruiters } from './discovery.mjs';
 import { findRocketReachCompany } from './rocketreach.mjs';
@@ -96,9 +96,22 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
         const full=domainOf(domainHint);
         if(excludedHost.test(full))throw new Error('it is a job board, applicant-tracking, or social site');
         const labels=full.split('.'), minimum=labels.length>=3&&/^(?:co|com|org|net|ac|gov|edu)$/.test(labels.at(-2))&&labels.at(-1).length===2?3:2;
+        // The open tab is only evidence when it is plausibly the company's own site: searching Meta from reddit.com must not yield reddit.com.
+        if(!labels.some((_,i)=>i<=labels.length-minimum&&looksLikeCompanySite(displayCompany,labels.slice(i).join('.'))))throw new Error(`${full} does not look like ${displayCompany}'s own site`);
         for(let i=0;i<=labels.length-minimum;i++){
-          const hint=labels.slice(i).join('.');const records=await mailServers(hint).catch(()=>[]);
+          const hint=labels.slice(i).join('.');if(!looksLikeCompanySite(displayCompany,hint))continue;
+          const records=await mailServers(hint).catch(()=>[]);
           if(!hasMail(records))continue;
+          // A country edition of the employer's site (meta.com.br, amazon.in) has real mail servers but is rarely where
+          // recruiters' mail lives. When RocketReach files the company under the global domain of the same name, that
+          // wins and the edition becomes a fallback for the run.
+          if(/^[a-z]{2}$/.test(hint.split('.').at(-1)))try{
+            const global=await rocketDomain();
+            if(global&&global.domain!==hint&&global.domain.split('.')[0]===hint.split('.')[0]){
+              trace({stage:'Domain search',status:'ok',detail:`The application page is on ${hint}, a country edition; RocketReach lists ${displayCompany} under ${global.domain}, which is used instead.`,source:pageUrl||undefined});
+              return {...global,message:`RocketReach lists ${global.domain} as the email domain for ${displayCompany}; the application page's ${hint} is a country edition and is kept as a fallback.`};
+            }
+          }catch(e){trace({stage:'Domain search',status:'partial',detail:`${hint} looks like a country edition, but RocketReach could not offer a global domain: ${e.message}.`});}
           trace({stage:'Domain search',status:'ok',detail:`Using ${hint} from the job application page; no domain search needed. Mail servers: ${records.map(r=>r.exchange).join(', ')}`,source:pageUrl||undefined});
           return {domain:hint,status:'application page',sources:pageUrl?[pageUrl]:[],checkedAt:new Date().toISOString(),message:`Email domain taken from the job application page (${hint}); mail servers found.`};
         }
@@ -149,7 +162,8 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
         else trace({stage:'Official site',status:'partial',detail:`${websiteDomain} has no mail servers, so it cannot be the email domain.`});
       }
       const alternates=[];
-      for(const alt of [websiteDomain,rocket?.domain,domainHint?registrableOf(domainHint):''].filter(Boolean)){
+      const hintAlt=domainHint&&looksLikeCompanySite(displayCompany,registrableOf(domainHint))?registrableOf(domainHint):'';
+      for(const alt of [websiteDomain,rocket?.domain,hintAlt].filter(Boolean)){
         if(!domain||alt===domain||alternates.includes(alt)||excludedHost.test(alt))continue;
         const records=await mailServers(alt).catch(()=>[]);if(hasMail(records))alternates.push(alt);
       }
@@ -388,7 +402,10 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
     return { id: run.id, company: run.company, domain: run.domain, originalDomain: run.originalDomain, alternates: run.alternates || [], status: run.status, stage: run.stage, mode: run.mode, verifiedFormat: run.verifiedFormat, error: run.error, stoppedBy: run.stoppedBy || null, startedAt: run.startedAt, finishedAt: run.finishedAt, attachment: run.attachResume ? db.resume?.filename || null : null, watchSeconds: RUN_WATCH, wave: run.wave ? { kind: run.wave.kind, secondsLeft: Math.max(0, Math.round(RUN_WATCH - elapsed)), checks: run.wave.checks, contactIds: run.wave.contactIds } : null, people, summary: { reached: count('reached'), watching: count('watching'), retrying: count('retrying'), exhausted: count('exhausted'), queued: count('queued') }, log: run.log.slice(-25) };
   }
   // Newest first: a run that completed later supersedes an older paused one on the Find page.
-  const recentRun = () => activeRun() || db.runs.find(r => ['stopped','interrupted'].includes(r.status) || (r.finishedAt && now() - Date.parse(r.finishedAt) < 3600000)) || null;
+  // A paused run stays in front for a day and a finished one for an hour; anything older is history only,
+  // so a run abandoned weeks ago never keeps re-opening in the extension.
+  const lastActivity = run => Date.parse(run.finishedAt || run.log?.at(-1)?.at || run.startedAt);
+  const recentRun = () => activeRun() || db.runs.find(r => (['stopped','interrupted'].includes(r.status) && now() - lastActivity(r) < 86400000) || (r.finishedAt && now() - Date.parse(r.finishedAt) < 3600000)) || null;
   async function resumeRun(id) {
     const run = db.runs.find(r => r.id === id); if (!run) throw fail('Run not found.', 404);
     if (!['stopped','interrupted'].includes(run.status)) throw fail('This run is not paused.');
@@ -426,6 +443,21 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
     save();return publicBatch(batch);
   }
   // A reviewer may drop a person from a draft batch; the last row cannot go (cancel the batch instead), and nothing else about the batch changes.
+  // One rewrite for the whole batch: the new template is personalized for every person (replacing any per-row edits),
+  // travels with the batch into its run and retries, and optionally becomes the saved default for future companies.
+  function retemplateBatch(owner,batchId,template,saveDefault=false) {
+    const batch=db.batches.find(b=>b.id===batchId&&b.owner===owner);
+    if(!batch||batch.status!=='draft')throw fail('This batch is unavailable or has already been started. Review the batch again.',409);
+    if(Date.now()-Date.parse(batch.created)>600000)throw fail('The preview expired. Review the batch again.');
+    const subject=String(template?.subject||'').trim().slice(0,200),message=String(template?.message||'').replace(/\r\n/g,'\n').trim().slice(0,20000);
+    if(!subject||!message)throw fail('Write a subject and a message.');
+    if(/[\r\n]/.test(subject))throw fail('The subject must be a single line.');
+    const rows=batch.rows.map(row=>{const contact=db.contacts.find(c=>c.id===row.id)||{name:row.name,company:''};const next={subject:personalize(subject,contact,row.to),message:personalize(message,contact,row.to)};try{mimeMessage({to:row.to,from:batch.from,...next});}catch(e){throw fail(`${row.name}: ${e.message}`);}return next;});
+    batch.rows.forEach((row,i)=>{row.subject=rows[i].subject;row.message=rows[i].message;row.edited=false;});
+    batch.template={subject,message};
+    if(saveDefault)db.template={subject,message};
+    save();return publicBatch(batch);
+  }
   function removeFromBatch(owner,batchId,contactId) {
     const batch=db.batches.find(b=>b.id===batchId&&b.owner===owner);
     if(!batch||batch.status!=='draft')throw fail('This batch is unavailable or has already been started. Review the batch again.',409);
@@ -628,6 +660,9 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       }
       if (path === '/api/extension/update' && req.method === 'POST') {
         return json({batch:updateBatch('extension',String(body.batchId||''),body.rows)});
+      }
+      if (path === '/api/extension/update-all' && req.method === 'POST') {
+        return json({batch:retemplateBatch('extension',String(body.batchId||''),body.template,body.saveDefault===true)});
       }
       if (path === '/api/extension/remove' && req.method === 'POST') {
         return json({batch:removeFromBatch('extension',String(body.batchId||''),String(body.contactId||''))});
