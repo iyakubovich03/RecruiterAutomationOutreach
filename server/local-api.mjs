@@ -11,7 +11,7 @@ import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync } from 'node:fs';
 import { resolveMx } from 'node:dns/promises';
 import { join } from 'node:path';
-import { candidates, candidateForFormat, domainOf, parseProfile, relevance, mimeMessage, emailPattern, MAX_ATTACHMENT_BYTES } from './core.mjs';
+import { candidateForFormat, domainOf, parseProfile, relevance, mimeMessage, emailPattern, MAX_ATTACHMENT_BYTES } from './core.mjs';
 import { automaticRecipients, nextCandidate } from '../app/outreach.mjs';
 const RESUME_TYPES = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 
@@ -733,7 +733,7 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
         let text = String(body.text || '').slice(0,20000);
         if (body.url && !text) {
           let target; try { target = new URL(body.url); } catch { throw fail('Enter a valid LinkedIn profile URL.'); }
-          if (target.protocol !== 'https:' || !['linkedin.com','www.linkedin.com'].includes(target.hostname) || !/^\/in\/[a-zA-Z0-9_%\-]+\/?$/.test(target.pathname) || target.port || target.username || target.password) throw fail('Use an https://www.linkedin.com/in/… profile URL.');
+          if (target.protocol !== 'https:' || !['linkedin.com','www.linkedin.com'].includes(target.hostname) || !/^\/in\/[a-zA-Z0-9_%-]+\/?$/.test(target.pathname) || target.port || target.username || target.password) throw fail('Use an https://www.linkedin.com/in/… profile URL.');
           target.search = ''; target.hash = '';
           let response; try { response = await fetch(target, { redirect:'manual', signal:AbortSignal.timeout(15000), headers:{ 'User-Agent':'RecruiterFinder/1.0 (local personal research)' } }); } catch { throw fail('The profile is unavailable. Paste its visible profile text instead.',422); }
           if (!response.ok) throw fail('LinkedIn blocked access or requires sign-in. Paste the profile text instead.',422);

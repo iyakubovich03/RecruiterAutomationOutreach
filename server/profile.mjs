@@ -4,7 +4,7 @@ const badName = /\b(linkedin|sign in|sign up|join now|security verification|recr
 export function fullName(value) {
   const name = compact(value).replace(/\s*\|\s*LinkedIn.*$/i,'').split(/\s+[-–—]\s+/)[0].replace(/\s*\([^)]*\)\s*/g,' ').replace(/,\s*(?:MBA|PhD|PHR|SPHR|SHRM.*|MA|MS|MSc|BA|BS|PMP).*$/i,'').replace(/\s*[·•]\s*(?:1st|2nd|3rd).*$/i,'').trim();
   const words = name.split(/\s+/);
-  return name.length <= 100 && words.length >= 2 && words.length <= 7 && !badName.test(name) && /^[\p{L}\p{M} .’'\-]+$/u.test(name) ? name : '';
+  return name.length <= 100 && words.length >= 2 && words.length <= 7 && !badName.test(name) && /^[\p{L}\p{M} .’'-]+$/u.test(name) ? name : '';
 }
 function headlineDetails(value) {
   const headline = compact(value);

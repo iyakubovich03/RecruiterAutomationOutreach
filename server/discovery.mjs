@@ -8,7 +8,7 @@ export function profileUrl(value) {
   try {
     let url = new URL(value,'https://html.duckduckgo.com');
     if (['duckduckgo.com','html.duckduckgo.com'].includes(url.hostname) && url.searchParams.has('uddg')) url=new URL(url.searchParams.get('uddg'));
-    if(url.protocol!=='https:'||!(url.hostname==='linkedin.com'||/^(www|[a-z]{2})\.linkedin\.com$/.test(url.hostname))||url.port||url.username||url.password||!/^\/in\/[a-zA-Z0-9_%\-]+\/?$/.test(url.pathname))return '';
+    if(url.protocol!=='https:'||!(url.hostname==='linkedin.com'||/^(www|[a-z]{2})\.linkedin\.com$/.test(url.hostname))||url.port||url.username||url.password||!/^\/in\/[a-zA-Z0-9_%-]+\/?$/.test(url.pathname))return '';
     return 'https://www.linkedin.com'+url.pathname.replace(/\/$/,'');
   } catch {return '';}
 }

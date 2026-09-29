@@ -37,10 +37,10 @@ export function parseRocketReach(html, domain, source) {
     const escaped = domain.replaceAll('.', '\\.');
     if (!new RegExp('@' + escaped + '(?![a-z0-9.-])', 'i').test(context)) return;
     const normalized = tokens(context);
-    const match = normalized.match(/\b(?:first|last|f2|l2|f|l)(?:[\s'"{}\[\]()._-]*(?:first|last|f2|l2|f|l))?\b/);
+    const match = normalized.match(/\b(?:first|last|f2|l2|f|l)(?:[\s'"{}[\]()._-]*(?:first|last|f2|l2|f|l))?\b/);
     if (!match) { if (/format/i.test(context)) unsupported.push(context); return; }
     const notation = cells.length ? tokens(compact(cells.first().text())) : match[0];
-    const format = notation.replace(/[\s'"{}\[\]()]/g, '');
+    const format = notation.replace(/[\s'"{}[\]()]/g, '');
     if (!candidateForFormat('Jane Smith', domain, format)) { unsupported.push(context); return; }
     const percent = context.match(/(\d+(?:\.\d+)?)\s*%/);
     const percentage = percent && Number(percent[1]) <= 100 ? Number(percent[1]) : null;

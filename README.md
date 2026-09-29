@@ -200,7 +200,9 @@ npm run typecheck
 npm run test:build
 ```
 
-Tests use synthetic profiles and mocked Google responses, never your credentials or real recipients. Actual Google sign-in requires you to register the redirect URI and authorize your account. Live sending is intentionally left for your explicit review in the app.
+Tests use synthetic profiles and mocked Google responses, never your credentials or real recipients.
+
+**Developer scripts** (`scripts/`, run with `node scripts/<name>.mjs`) exercise one stage of the pipeline against live services, using the keys in `.env.local`, when a search misbehaves: `domain-live.mjs <company>` resolves the email domain; `discovery-live.mjs` runs the recruiter search and saves the raw pages under `.local-data/research/`; `rocketreach-live.mjs` and `inspect-rocketreach.mjs` fetch and parse a RocketReach format page; `debug-search.mjs` runs domain and recruiter discovery together. `npm run audit` (above) is the batch version. Actual Google sign-in requires you to register the redirect URI and authorize your account. Live sending is intentionally left for your explicit review in the app.
 
 References: [Google OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [Gmail sending](https://developers.google.com/workspace/gmail/api/guides/sending).
 

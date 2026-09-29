@@ -32,7 +32,7 @@ export function websiteEvidence(html,source,company) {
    if([value['@type']].flat().some(t=>typeof t==='string'&&/(?:^|\/)(Organization|Corporation)$/.test(t))&&[value.name,value.legalName,value.alternateName].flat().some(n=>normalize(n)===wanted))orgs.push(value);
    Object.values(value).forEach(v=>visit(v,depth+1));
  }
- $('script[type="application/ld+json"]').each((_,el)=>{try{visit(JSON.parse($(el).text()));}catch{}});
+ $('script[type="application/ld+json"]').each((_,el)=>{try{visit(JSON.parse($(el).text()));}catch{ /* not JSON */ }});
  const title=$('title').text(),siteName=$('meta[property="og:site_name"]').attr('content')||'';
  const titleMatch=title.toLowerCase().includes(company.toLowerCase()),brandHost=normalize(siteDomain.split('.')[0])===wanted;
  const matchedOrg=orgs.find(org=>{try{return !org.url||domainOf(org.url)===siteDomain;}catch{return false;}});
