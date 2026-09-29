@@ -170,7 +170,7 @@ The latest search results are kept for the local session, so a page reload does 
 
 ## Search API
 
-Recruiter discovery, company-domain discovery, and RocketReach page discovery all start from a web search for queries such as `site:linkedin.com/in/ "<company>" recruiter`. The public DuckDuckGo HTML endpoint now answers automated requests with a bot challenge, and Bing's HTML/RSS endpoints silently drop the `site:` operator and omit LinkedIn profile pages, so without an API key a search returns no recruiters. Configure one of these in `.env.local`:
+Recruiter discovery, company-domain discovery, and RocketReach page discovery all start from a web search for queries such as `site:linkedin.com/in/ "<company>" recruiter`. When that finds nobody the recruiter search retries across all of `linkedin.com` (Google sometimes ignores the profile-path restriction and answers with generic recruiter pages), then once more without quotes around the company name. The public DuckDuckGo HTML endpoint now answers automated requests with a bot challenge, and Bing's HTML/RSS endpoints silently drop the `site:` operator and omit LinkedIn profile pages, so without an API key a search returns no recruiters. Configure one of these in `.env.local`:
 
 - **Serper** (recommended; https://serper.dev): whole-web Google results as JSON with free starter credits and no card. Sign in, open **API Keys**, and set `SERPER_API_KEY`. One company search costs about three to four credits.
 - **SerpApi** (https://serpapi.com): also whole-web Google results; 100 free searches per month. Set `SERPAPI_KEY`.

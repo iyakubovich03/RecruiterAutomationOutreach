@@ -77,13 +77,25 @@ export async function discoverRecruiters(company, domain='', fetcher=fetch, onEv
     }});
     return {search,rows:search.rows.length?matched:[]};
   };
-  let {search,rows}=await attempt(`site:linkedin.com/in/ "${safeCompany}" ${config.search.roleKeyword}`);
-  if(!search.available)throw error('Automatic public search is currently blocked or unavailable. Try again later. No profiles were fabricated or imported.');
-  if(!rows.length){
-    // Exact-phrase searches miss spelling variants ("Scaleai" vs "Scale AI"); one unquoted retry is cheap.
-    onEvent({stage:'Recruiter search',status:'partial',detail:'No profiles matched the exact company name; retrying without quotes.'});
-    const second=await attempt(`site:linkedin.com/in/ ${safeCompany} ${config.search.roleKeyword}`);
-    if(second.rows.length)({search,rows}=second);else search.warnings.push(...second.search.warnings.filter(w=>!search.warnings.includes(w)));
+  // Query ladder, one search each, stopping at the first that yields recruiters:
+  // 1. profiles only, exact company name;
+  // 2. all of linkedin.com, exact name: Google sometimes drops the /in/ path restriction and answers a query like
+  //    `site:linkedin.com/in/ "Robinhood" recruiter` with generic recruiter pages, while the bare site works
+  //    (profile links are filtered from the results anyway);
+  // 3. all of linkedin.com, unquoted: exact phrases miss spelling variants ("Scaleai" vs "Scale AI").
+  const keyword=config.search.roleKeyword;
+  const ladder=[
+    [`site:linkedin.com/in/ "${safeCompany}" ${keyword}`,''],
+    [`site:linkedin.com "${safeCompany}" ${keyword}`,'No profiles matched with the profile-path restriction; retrying across all of linkedin.com.'],
+    [`site:linkedin.com ${safeCompany} ${keyword}`,'No profiles matched the exact company name; retrying without quotes.'],
+  ];
+  let search=null,rows=[];
+  for(const [query,reason] of ladder){
+    if(reason)onEvent({stage:'Recruiter search',status:'partial',detail:reason});
+    const result=await attempt(query);
+    if(!search){({search,rows}=result);if(!search.available)throw error('Automatic public search is currently blocked or unavailable. Try again later. No profiles were fabricated or imported.');}
+    else if(result.rows.length)({search,rows}=result);else search.warnings.push(...result.search.warnings.filter(w=>!search.warnings.includes(w)));
+    if(rows.length)break;
   }
   rows=rows.sort((a,b)=>b.score-a.score).slice(0,8);
   onEvent({stage:'Recruiter discovery',status:rows.length?'ok':'empty',detail:`${rows.length} recruiters extracted from LinkedIn search results (maximum 8).${rows.length?'':' No results met the full-name, recruiting-role, and explicit company-association filters.'}`});

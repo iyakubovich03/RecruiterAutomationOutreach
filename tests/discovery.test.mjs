@@ -74,7 +74,7 @@ test('company matching ignores spacing and the search retries unquoted when the 
  const result=await discoverRecruiters('Scaleai','',async url=>{const q=decodeURIComponent(String(url));queries.push(q);if(!q.includes('duckduckgo'))return new Response('Blocked',{status:403});return new Response(q.includes('"Scaleai"')?'<div class="result"></div>':'<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Scale AI | LinkedIn</a></div>');});
  assert.equal(result.results.length,1);assert.equal(result.results[0].name,'Jane Smith');
  assert.equal(result.results[0].observedCompany,'Scale AI');assert.equal(result.canonicalCompany,'Scale AI');assert.equal(result.company,'Scaleai');
- assert.equal(queries.filter(q=>q.includes('duckduckgo')).length,2);assert.match(queries.at(-1),/in\/ Scaleai recruiter/);
+ assert.equal(queries.filter(q=>q.includes('duckduckgo')).length,3);assert.match(queries.at(-1),/site:linkedin\.com Scaleai recruiter/);
 });
 test('company names containing regular expression characters match literally',()=>{
  assert.ok(rankProfile({headline:'Jane Smith - Recruiter at Example (US)',snippet:''},'Example (US)'));
