@@ -83,6 +83,26 @@ export function rocketReachDomain(html, source) {
 const legalForms = /\b(?:inc|incorporated|corp|corporation|co|ltd|limited|llc|plc|gmbh|bv|pty|ag|sa)\b\.?/gi;
 export const rocketReachPageName = title => compact(String(title || '').split('|')[0].replace(/\s+email\s+format\b.*$/i, ''));
 const nameKey = name => String(name || '').toLowerCase().replace(legalForms, '').replace(/[^\p{L}\p{N}]/gu, '');
+// RocketReach files every company under one id: /<slug>-email-format_<id>, /<slug>-profile_<id>, /<slug>-<team>-department_<id>,
+// /<slug>-management_<id>. Google sometimes returns only the department or profile pages for a company (Robinhood),
+// so the email-format page is derived from any of them: the server serves the page by id whatever the slug says.
+// Only a page whose slug names exactly the wanted company counts, so "robin-hood-ventures-profile" never stands in for Robinhood.
+const PAGE_SUFFIX = /^(?:profile|management|competitors|overview|(?:[a-z0-9-]+-)?department)$/;
+export function derivedFormatPage(value, company) {
+  const wanted = nameKey(company);
+  if (wanted.length < 3) return null;
+  try {
+    const url = new URL(value, 'https://html.duckduckgo.com');
+    if (url.protocol !== 'https:' || !/^(www\.)?rocketreach\.co$/.test(url.hostname) || url.username || url.password || url.port) return null;
+    const match = url.pathname.match(/^\/([a-z0-9-]+)_([0-9a-f]{16})\/?$/);
+    if (!match) return null;
+    const words = match[1].split('-');
+    for (let i = 1; i < words.length; i++) {
+      if (nameKey(words.slice(0, i).join(' ')) === wanted && PAGE_SUFFIX.test(words.slice(i).join('-'))) return { url: `https://rocketreach.co/${words.slice(0, i).join('-')}-email-format_${match[2]}`, name: company };
+    }
+    return null;
+  } catch { return null; }
+}
 function mentions(name, text) {
   const key = nameKey(name);
   if (key.length < 3) return false;
@@ -91,7 +111,12 @@ function mentions(name, text) {
 }
 export function rankRocketReachPages(rows, company, employers = []) {
   const wanted = nameKey(company);
-  const pages = rows.map((row, index) => ({ url: rocketreachUrl(row.url), title: row.title || '', name: rocketReachPageName(row.title), index })).filter(page => page.url);
+  const seen = new Set(), pages = [];
+  rows.forEach((row, index) => {
+    const url = rocketreachUrl(row.url), derived = url ? null : derivedFormatPage(row.url, company);
+    const page = url ? { url, title: row.title || '', name: rocketReachPageName(row.title), index } : derived ? { url: derived.url, title: row.title || '', name: derived.name, index, derived: true } : null;
+    if (page && !seen.has(page.url)) { seen.add(page.url); pages.push(page); }
+  });
   for (const page of pages) { page.key = nameKey(page.name); page.exact = page.key.length >= 3 && page.key === wanted; page.employers = 0; }
   for (const text of employers) {
     // Credit only the most specific page name a profile mentions: "Mitsubishi Power Americas" beats "Mitsubishi".
@@ -113,8 +138,8 @@ async function readPage(read, url, onEvent, stage) {
     return read(url);
   }
 }
-async function searchRocketReach(queries, { env, fetcher, read, onEvent }) {
-  const hasRocket = rows => rows.some(row => rocketreachUrl(row.url));
+async function searchRocketReach(queries, { env, fetcher, read, onEvent, company = '' }) {
+  const hasRocket = rows => rows.some(row => rocketreachUrl(row.url) || derivedFormatPage(row.url, company));
   const warnings = [];
   for (const [index, query] of queries.entries()) {
     // Public search pages drop site:, so a site: query is API-only whenever a plain query is there to scrape instead.
@@ -134,7 +159,10 @@ export async function findRocketReachCompany(company, { read = publicPage, onEve
   // rocketreach.co page at all; the site: form goes straight to the company page. Search APIs honour site:,
   // the public search pages drop it, so the plain query stays as the fallback for those.
   // The name stays unquoted: quoting it makes Google return unrelated rocketreach.co org-chart pages instead.
-  const search = await searchRocketReach([`site:rocketreach.co ${name} email format`, `rocketreach ${name} email format`], { env, fetcher, read, onEvent });
+  // Google honours site: inconsistently per query: for some companies (Robinhood, Figma) the unquoted form comes
+  // back as pages about the word "format" while quoting "email format" returns the company page, and for others
+  // (Scale AI) it is the other way round, so both forms are tried before the plain fallback.
+  const search = await searchRocketReach([`site:rocketreach.co ${name} email format`, `site:rocketreach.co ${name} "email format"`, `rocketreach ${name} email format`], { env, fetcher, read, onEvent, company: name });
   const ranked = rankRocketReachPages(search.rows, name, employers);
   const urls = [...new Set(ranked.map(page => page.url))];
   if (!urls.length) return null;
@@ -163,15 +191,15 @@ export async function findRocketReachCompany(company, { read = publicPage, onEve
 export async function findRocketReach(domain, { read = publicPage, onEvent = () => {}, company = '', env = {}, fetcher = fetch, urls = [] } = {}) {
   domain = domainOf(domain);
   const name = compact(company).replace(/["\r\n]/g, ' ').slice(0,100);
-  const queries = [...new Set([...(name ? [`site:rocketreach.co ${name} email format`] : []), `site:rocketreach.co "${domain}" "email format"`, ...(name ? [`rocketreach ${name} email format`] : [])])];
+  const queries = [...new Set([...(name ? [`site:rocketreach.co ${name} email format`, `site:rocketreach.co ${name} "email format"`] : []), `site:rocketreach.co "${domain}" "email format"`, ...(name ? [`rocketreach ${name} email format`] : [])])];
   // `urls` entries are page links or { url, title } pairs from an earlier search; titles let other companies' pages be skipped unrequested.
   const links = new Map(), sources = [], patterns = [], warnings = [];
   for (const item of urls) { const url = rocketreachUrl(typeof item === 'string' ? item : item?.url); if (url && !links.has(url)) links.set(url, typeof item === 'string' ? '' : String(item?.title || '')); }
   if (links.size) onEvent({ stage: 'RocketReach search', status: 'ok', detail: `Reusing ${links.size} RocketReach page link${links.size === 1 ? '' : 's'} already found for ${name || domain}.` });
   else {
-    const search = await searchRocketReach(queries, { env, fetcher, read, onEvent });
+    const search = await searchRocketReach(queries, { env, fetcher, read, onEvent, company: name });
     // Titles read "Gartner Email Format | gartner.com Emails": pages naming the wanted domain are read first.
-    const rows = search.rows.map(row => ({ url: rocketreachUrl(row.url), title: String(row.title || ''), named: String(row.title || '').toLowerCase().includes(domain) })).filter(row => row.url);
+    const rows = search.rows.map(row => ({ url: rocketreachUrl(row.url) || derivedFormatPage(row.url, name)?.url || '', title: String(row.title || ''), named: String(row.title || '').toLowerCase().includes(domain) })).filter(row => row.url);
     for (const row of rows.sort((a, b) => Number(b.named) - Number(a.named))) if (!links.has(row.url)) links.set(row.url, row.title);
     warnings.push(...search.warnings);
   }

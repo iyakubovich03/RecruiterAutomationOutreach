@@ -9,7 +9,7 @@ test('keyed providers are only enabled when their credentials exist',()=>{
 test('SerpApi results are parsed and its in-body error is treated as a failure',async()=>{
  const calls=[];
  const ok=await searchWeb('q',{env:{SERPAPI_KEY:'a'},fetcher:async url=>{calls.push(String(url));return Response.json({organic_results:[{link:'https://rocketreach.co/x-email-format_1',title:'X Email Format',snippet:'formats'}]});},read:async()=>{throw new Error('must not scrape');}});
- assert.equal(ok.provider,'SerpApi Google API');assert.equal(ok.rows[0].url,'https://rocketreach.co/x-email-format_1');assert.match(calls[0],/api_key=a/);
+ assert.equal(ok.provider,'SerpApi Google API');assert.equal(ok.rows[0].url,'https://rocketreach.co/x-email-format_1');assert.match(calls[0],/api_key=a/);assert.match(calls[0],/gl=us&hl=en&google_domain=google\.com/);
  const events=[];const failed=await searchWeb('q',{env:{SERPAPI_KEY:'a'},fetcher:async()=>Response.json({error:'Invalid API key'}),read:async()=>'<html></html>',onEvent:e=>events.push(e)});
  assert.equal(failed.provider,'');assert.ok(events.some(e=>e.status==='error'&&/Invalid API key/.test(e.detail)));
  assert.ok(events.every(e=>!String(e.source||'').includes('api_key')));

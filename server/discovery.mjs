@@ -102,6 +102,9 @@ export async function discoverRecruiters(company, domain='', fetcher=fetch, onEv
   for(const row of rows)onEvent({stage:'Company association',status:'ok',detail:`${row.name}: ${row.association.text}. Search evidence; current employment is not independently confirmed.`,source:row.source});
   const spellings=new Map();
   for(const row of rows){const key=row.observedCompany.toLowerCase().replace(/\s+/g,'');const entry=spellings.get(key)||{name:row.observedCompany,count:0};entry.count++;spellings.set(key,entry);}
-  const canonicalCompany=[...spellings.values()].sort((a,b)=>b.count-a.count)[0]?.name||company;
+  // The most common observed spelling wins ("Scale AI" over a typed "Scaleai"), unless it differs from the typed
+  // name only by letter case (a headline shouting "ROBINHOOD"): then the typed name is kept for later searches.
+  const top=[...spellings.values()].sort((a,b)=>b.count-a.count)[0]?.name;
+  const canonicalCompany=!top||top.toLowerCase()===company.toLowerCase()?company:top;
   return {company,canonicalCompany,domain,provider:search.provider||'Public search',searchedAt:new Date().toISOString(),warnings:search.warnings,results:rows.map(row=>({...row,candidates:domain?candidates(row.name,domain,row.sourceText):[]}))};
 }

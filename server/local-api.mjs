@@ -4,7 +4,7 @@ import { discoverCompanyDomain, excludedHost, freemailHost, looksLikeCompanySite
 import { findPatterns, rankCandidates } from './patterns.mjs';
 import { discoverRecruiters } from './discovery.mjs';
 import { findRocketReachCompany } from './rocketreach.mjs';
-import { apiProviders, searchWeb } from './search.mjs';
+import { apiProviders, searchWeb, forgetSearches } from './search.mjs';
 import { searchConfig, publicConfig } from './config.mjs';
 import { parseProfileHtml } from './profile.mjs';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
@@ -74,6 +74,7 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
   const publicBatch = batch => { const copy = { ...batch }; delete copy.owner; return copy; };
   async function runDiscovery(company, { domain = '', fresh = false, onDebug = () => {}, domainHint = '', pageUrl = '' } = {}) {
     const key=company.toLowerCase()+'|'+domain, cached=discoveryCache.get(key);
+    if(fresh)forgetSearches();
     if(discovering)throw fail('A company search is already running. Please wait.',409);
     const debug={company,running:true,startedAt:new Date().toISOString(),events:[]};onDebug(debug);lastDebug=debug;
     const trace=event=>{if(debug.events.length<120)debug.events.push({...event,detail:String(event.detail||'').slice(0,1000),at:new Date().toISOString()});};

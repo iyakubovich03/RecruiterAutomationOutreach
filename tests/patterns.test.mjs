@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rankCandidates, findPatterns } from '../server/patterns.mjs';
 import { publicIPv4, publicPage } from '../server/public-page.mjs';
-import { parseRocketReach, findRocketReach, rocketreachUrl, rocketReachDomain, findRocketReachCompany, rankRocketReachPages } from '../server/rocketreach.mjs';
+import { derivedFormatPage, parseRocketReach, findRocketReach, rocketreachUrl, rocketReachDomain, findRocketReachCompany, rankRocketReachPages } from '../server/rocketreach.mjs';
 import { createPatternCache, patternExpiry } from '../server/pattern-cache.mjs';
 const rocketSource='https://rocketreach.co/example-email-format_ab12';
 
@@ -198,6 +198,31 @@ test('the domain is read from the title, then the meta description, then the for
  const report=parseRocketReach(gartnerPage(),'gartner.com',url);
  assert.deepEqual(report.patterns.map(p=>[p.format,p.percentage]),[['first.last',87.3],['firstlast',3.9],['lastf',2.6]]);
  assert.equal(parseRocketReach(gartnerPage(),'josef-gartner.de',url).patterns.length,0);
+});
+test('the email-format page is derived from a RocketReach department or profile page that names the company',async()=>{
+ const derived='https://rocketreach.co/robinhood-email-format_b5f7be25f42edfe1';
+ const page='<title>Robinhood Email Format | robinhood.com Emails</title><table><tr><td>[first].[last]</td><td>jane.doe@robinhood.com</td><td>88.6%</td></tr></table>';
+ const queries=[],reads=[];
+ const fetcher=async url=>{queries.push(decodeURIComponent(new URL(String(url)).searchParams.get('q')||''));return Response.json({organic_results:[{link:'https://rocketreach.co/robinhood-finance-department_b5f7be25f42edfe1',title:'Robinhood Finance Department'},{link:'https://rocketreach.co/robin-hood-ventures-profile_b5e5836bf42e60bd',title:'Robin Hood Ventures'}]});};
+ const read=async u=>{reads.push(u);if(u===derived)return page;throw new Error('must not read '+u);};
+ const found=await findRocketReachCompany('Robinhood',{env:{SERPAPI_KEY:'k'},fetcher,read});
+ assert.equal(found.domain,'robinhood.com');assert.equal(found.source,derived);assert.deepEqual(queries,['site:rocketreach.co Robinhood email format']);assert.deepEqual(reads,[derived]);
+ // Robin Hood Ventures' profile is not Robinhood's, person pages have numeric ids, and multi-word team pages resolve to the company.
+ assert.equal(derivedFormatPage('https://rocketreach.co/robin-hood-ventures-profile_b5e5836bf42e60bd','Robinhood'),null);
+ assert.equal(derivedFormatPage('https://rocketreach.co/nick-robbins-email_4298949','Nick Robbins'),null);
+ assert.deepEqual(derivedFormatPage('https://rocketreach.co/scale-ai-customer-service-department_b448f9c1fce67283','Scale AI'),{url:'https://rocketreach.co/scale-ai-email-format_b448f9c1fce67283',name:'Scale AI'});
+ // Format research reuses the derived link without searching again.
+ const formats=await findRocketReach('robinhood.com',{company:'Robinhood',urls:found.pages,read});
+ assert.equal(formats.patterns[0].format,'first.last');assert.equal(formats.patterns[0].percentage,88.6);
+});
+test('when Google answers the site: query with unrelated pages, the quoted "email format" form is tried before the plain fallback',async()=>{
+ const queries=[];const page='https://rocketreach.co/robinhood-email-format_b5f7be25f42edfe1';
+ const fetcher=async url=>{const q=decodeURIComponent(new URL(String(url)).searchParams.get('q')||'');queries.push(q);
+  // Google dropped the operator on the first form (pages about the word "format"), honoured it on the quoted form.
+  if(q.includes('"email format"'))return Response.json({organic_results:[{link:page,title:'Robinhood Email Format | robinhood.com Emails'}]});
+  return Response.json({organic_results:[{link:'https://www.format.com/',title:'Format: Create Your Online Portfolio Website'},{link:'https://doc.rust-lang.org/std/macro.format.html',title:'format in std'}]});};
+ const found=await findRocketReachCompany('Robinhood',{env:{SERPAPI_KEY:'k'},fetcher,read:async u=>{if(u===page)return '<title>Robinhood Email Format | robinhood.com Emails</title><p>jane@robinhood.com</p>';throw new Error('must not scrape '+u);}});
+ assert.equal(found.domain,'robinhood.com');assert.deepEqual(queries,['site:rocketreach.co Robinhood email format','site:rocketreach.co Robinhood "email format"']);
 });
 test('the RocketReach company search asks the API for site:rocketreach.co first, since a plain query can return only videos about RocketReach',async()=>{
  const queries=[];const page='https://rocketreach.co/figma-email-format_b5f1aa14f6b3a5a6';

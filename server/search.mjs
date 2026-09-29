@@ -50,7 +50,7 @@ export function apiProviders(env = {}) {
     name: 'serper', label: 'Serper Google API',
     source: query => 'https://google.serper.dev/search?q=' + encodeURIComponent(query),
     async search(query, fetcher) {
-      const response = await fetcher('https://google.serper.dev/search', { method: 'POST', headers: { 'X-API-KEY': env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, num: 10 }), signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+      const response = await fetcher('https://google.serper.dev/search', { method: 'POST', headers: { 'X-API-KEY': env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, num: 10, gl: 'us', hl: 'en' }), signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`Serper API error (${response.status}): ${data.message || 'no details'}`);
       return (data.organic || []).map(item => ({ url: unwrapUrl(item.link), title: compact(item.title), snippet: compact(item.snippet) }));
@@ -60,7 +60,8 @@ export function apiProviders(env = {}) {
     name: 'serpapi', label: 'SerpApi Google API',
     source: query => 'https://serpapi.com/search?engine=google&q=' + encodeURIComponent(query),
     async search(query, fetcher) {
-      const params = new URLSearchParams({ engine: 'google', q: query, num: '10', output: 'json', api_key: env.SERPAPI_KEY });
+      // Locale pinned to US English: without it Google more often drops a site: operator and answers the bare words.
+      const params = new URLSearchParams({ engine: 'google', q: query, num: '10', output: 'json', gl: 'us', hl: 'en', google_domain: 'google.com', api_key: env.SERPAPI_KEY });
       const response = await fetcher('https://serpapi.com/search?' + params, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) throw new Error(`SerpApi error (${response.status}): ${data.error || 'no details'}`);
@@ -72,6 +73,19 @@ export function apiProviders(env = {}) {
 
 const transientSearchError = /aborted|timed? ?out|ECONNRESET|EAI_AGAIN|socket hang up|fetch failed|\(5\d\d\)/i;
 apiProviders.names = new Set(['google-api', 'serper', 'serpapi']);
+// One company search asks the APIs the same question more than once (the RocketReach ladder runs for the domain and
+// again for the formats), and every API call costs a credit. Answers are kept for ten minutes per fetcher, so a
+// repeated query within a search is free while mocked fetchers in tests never share answers.
+const MEMO_MS = 600000; let memos = new WeakMap();
+// "Run fresh search" must really ask again.
+export function forgetSearches() { memos = new WeakMap(); }
+async function remembered(fetcher, key, produce) {
+  let memo = memos.get(fetcher); if (!memo) memos.set(fetcher, memo = new Map());
+  const hit = memo.get(key); if (hit && Date.now() - hit.at < MEMO_MS) return hit.rows;
+  const rows = await produce(); memo.set(key, { rows, at: Date.now() });
+  if (memo.size > 200) memo.delete(memo.keys().next().value);
+  return rows;
+}
 export async function searchWeb(query, { env = {}, fetcher = fetch, read = publicPage, onEvent = () => {}, stage = 'Search', scrape = ['duckduckgo', 'bing'], accept = rows => rows.length > 0 } = {}) {
   const providers = [...apiProviders(env), ...scrape.map(name => ({ name, label: scrapers[name].label, source: scrapers[name].url, async search(q) { const html = await read(scrapers[name].url(q)); if (blockedMarkers.test(html)) throw new Error('Search source requires an interactive check.'); scrapers[name].check(html); return parseSearchHtml(html, name); } }))];
   const warnings = [];
@@ -81,11 +95,12 @@ export async function searchWeb(query, { env = {}, fetcher = fetch, read = publi
     onEvent({ stage, status: 'running', detail: `${provider.name}: ${query}`, source });
     try {
       // A search API occasionally times out on a single request; one retry keeps that from sinking the whole search.
-      const rows = (await provider.search(query, fetcher).catch(async error => {
+      const ask = () => provider.search(query, fetcher).catch(async error => {
         if (!transientSearchError.test(error.message) || !apiProviders.names.has(provider.name)) throw error;
         onEvent({ stage, status: 'partial', detail: `${provider.name}: ${error.message}. Retrying once.`, source });
         return provider.search(query, fetcher);
-      })).filter(row => row.url);
+      });
+      const rows = (apiProviders.names.has(provider.name) ? await remembered(fetcher, provider.name + '|' + query, ask) : await ask()).filter(row => row.url);
       available++;
       const done = accept(rows);
       onEvent({ stage, status: rows.length ? 'ok' : 'empty', detail: `${provider.name}: ${rows.length} results${rows.length && !done ? '; none matched, trying the next source' : ''}`, source });
