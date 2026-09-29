@@ -23,7 +23,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'status': sendResponse(await api('/api/extension/status')); break;
       case 'progress': sendResponse(await api('/api/extension/progress')); break;
-      case 'preview': sendResponse(await api('/api/extension/preview', { company: String(message.company || ''), fresh: message.fresh === true, siteHint: String(message.siteHint || ''), pageUrl: String(message.pageUrl || '') })); break;
+      case 'preview': sendResponse(await api('/api/extension/preview', { company: String(message.company || ''), fresh: message.fresh === true, more: message.more === true, siteHint: String(message.siteHint || ''), pageUrl: String(message.pageUrl || '') })); break;
       case 'update': sendResponse(await api('/api/extension/update', { batchId: String(message.batchId || ''), rows: Array.isArray(message.rows) ? message.rows.map(r => ({ id: String(r.id || ''), to: String(r.to || ''), subject: String(r.subject || ''), message: String(r.message || '') })) : [] })); break;
       case 'send': sendResponse(await api('/api/extension/send', { batchId: String(message.batchId || ''), confirmed: true })); break;
       case 'bounces': sendResponse(await api('/api/extension/bounces', { batchId: String(message.batchId || '') })); break;

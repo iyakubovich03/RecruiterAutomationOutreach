@@ -61,17 +61,21 @@ async function readPublic(url,fetcher,timeout=10000) {
   while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.length;if(bytes>1500000){await reader.cancel();throw error('Public source response was too large.');}text+=decoder.decode(part.value,{stream:true});}
   return text+decoder.decode();
 }
-export async function discoverRecruiters(company, domain='', fetcher=fetch, onEvent=()=>{}, {env={},config=searchConfig}={}) {
+// `keywords` replaces the configured role keyword (one query ladder per keyword, results merged); `exclude` lists profile
+// URLs already found so "Find more recruiters" only adds people; `limit` caps the rows returned.
+export async function discoverRecruiters(company, domain='', fetcher=fetch, onEvent=()=>{}, {env={},config=searchConfig,keywords=null,exclude=[],limit=8}={}) {
   company=compact(company);
   if(company.length<2||company.length>100||!/[\p{L}\p{N}]/u.test(company))throw error('Enter a company name between 2 and 100 characters.',400);
   domain=domain?domainOf(domain):'';
   const safeCompany=company.replace(/["\r\n]/g,' ');
+  const excluded=new Set(exclude);
   const attempt=async query=>{
     let matched=[];
     const search=await searchWeb(query,{env,fetcher,read:url=>readPublic(url,fetcher),onEvent,stage:'Recruiter search',accept:results=>{
       const parsed=profileRows(results);
-      matched=parsed.map(row=>rankProfile(row,company,config)).filter(Boolean);
-      onEvent({stage:'Profile filter',status:matched.length?'ok':'empty',detail:`${parsed.length} unique LinkedIn profile links; ${matched.length} matched company, name, and recruiting filters; ${parsed.length-matched.length} excluded`});
+      const ranked=parsed.map(row=>rankProfile(row,company,config)).filter(Boolean);
+      matched=ranked.filter(row=>!excluded.has(row.source));
+      onEvent({stage:'Profile filter',status:matched.length?'ok':'empty',detail:`${parsed.length} unique LinkedIn profile links; ${ranked.length} matched company, name, and recruiting filters; ${parsed.length-ranked.length} excluded${ranked.length-matched.length?`; ${ranked.length-matched.length} already found`:''}`});
       for(const row of parsed.filter(r=>!rankProfile(r,company,config)).slice(0,10))onEvent({stage:'Profile filter',status:'rejected',detail:`${row.headline} — missing a full name, recruiting role, or explicit company association; historical associations are excluded`,source:row.source});
       return matched.length>0;
     }});
@@ -83,21 +87,25 @@ export async function discoverRecruiters(company, domain='', fetcher=fetch, onEv
   //    `site:linkedin.com/in/ "Robinhood" recruiter` with generic recruiter pages, while the bare site works
   //    (profile links are filtered from the results anyway);
   // 3. all of linkedin.com, unquoted: exact phrases miss spelling variants ("Scaleai" vs "Scale AI").
-  const keyword=config.search.roleKeyword;
-  const ladder=[
-    [`site:linkedin.com/in/ "${safeCompany}" ${keyword}`,''],
-    [`site:linkedin.com "${safeCompany}" ${keyword}`,'No profiles matched with the profile-path restriction; retrying across all of linkedin.com.'],
-    [`site:linkedin.com ${safeCompany} ${keyword}`,'No profiles matched the exact company name; retrying without quotes.'],
-  ];
-  let search=null,rows=[];
-  for(const [query,reason] of ladder){
-    if(reason)onEvent({stage:'Recruiter search',status:'partial',detail:reason});
-    const result=await attempt(query);
-    if(!search){({search,rows}=result);if(!search.available)throw error('Automatic public search is currently blocked or unavailable. Try again later. No profiles were fabricated or imported.');}
-    else if(result.rows.length)({search,rows}=result);else search.warnings.push(...result.search.warnings.filter(w=>!search.warnings.includes(w)));
-    if(rows.length)break;
+  const words=keywords?.length?keywords:[config.search.roleKeyword];
+  let search=null;const found=new Map();
+  for(const keyword of words){
+    if(words.length>1)onEvent({stage:'Recruiter search',status:'running',detail:`Looking for “${keyword}” profiles at ${company}.`});
+    // The unquoted step only exists to catch spelling variants; extra keywords already search under the resolved name, so they skip it.
+    const ladder=[
+      [`site:linkedin.com/in/ "${safeCompany}" ${keyword}`,''],
+      [`site:linkedin.com "${safeCompany}" ${keyword}`,'No profiles matched with the profile-path restriction; retrying across all of linkedin.com.'],
+      ...(keywords?.length?[]:[[`site:linkedin.com ${safeCompany} ${keyword}`,'No profiles matched the exact company name; retrying without quotes.']]),
+    ];
+    for(const [query,reason] of ladder){
+      if(reason)onEvent({stage:'Recruiter search',status:'partial',detail:reason});
+      const result=await attempt(query);
+      if(!search){search=result.search;if(!search.available)throw error('Automatic public search is currently blocked or unavailable. Try again later. No profiles were fabricated or imported.');}
+      else{search.warnings.push(...result.search.warnings.filter(w=>!search.warnings.includes(w)));if(result.search.provider)search.provider=result.search.provider;}
+      if(result.rows.length){for(const row of result.rows)if(!found.has(row.source))found.set(row.source,row);break;}
+    }
   }
-  rows=rows.sort((a,b)=>b.score-a.score).slice(0,8);
+  const rows=[...found.values()].sort((a,b)=>b.score-a.score).slice(0,Math.max(0,limit));
   onEvent({stage:'Recruiter discovery',status:rows.length?'ok':'empty',detail:`${rows.length} recruiters extracted from LinkedIn search results (maximum 8).${rows.length?'':' No results met the full-name, recruiting-role, and explicit company-association filters.'}`});
   for(const row of rows)onEvent({stage:'Company association',status:'ok',detail:`${row.name}: ${row.association.text}. Search evidence; current employment is not independently confirmed.`,source:row.source});
   const spellings=new Map();

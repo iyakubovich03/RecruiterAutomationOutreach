@@ -61,7 +61,7 @@ export function apiProviders(env = {}) {
     source: query => 'https://serpapi.com/search?engine=google&q=' + encodeURIComponent(query),
     async search(query, fetcher) {
       // Locale pinned to US English: without it Google more often drops a site: operator and answers the bare words.
-      const params = new URLSearchParams({ engine: 'google', q: query, num: '10', output: 'json', gl: 'us', hl: 'en', google_domain: 'google.com', api_key: env.SERPAPI_KEY });
+      const params = new URLSearchParams({ engine: 'google', q: query, num: '10', output: 'json', gl: 'us', hl: 'en', google_domain: 'google.com', ...(freshSearch ? { no_cache: 'true' } : {}), api_key: env.SERPAPI_KEY });
       const response = await fetcher('https://serpapi.com/search?' + params, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) throw new Error(`SerpApi error (${response.status}): ${data.error || 'no details'}`);
@@ -76,9 +76,11 @@ apiProviders.names = new Set(['google-api', 'serper', 'serpapi']);
 // One company search asks the APIs the same question more than once (the RocketReach ladder runs for the domain and
 // again for the formats), and every API call costs a credit. Answers are kept for ten minutes per fetcher, so a
 // repeated query within a search is free while mocked fetchers in tests never share answers.
-const MEMO_MS = 600000; let memos = new WeakMap();
-// "Run fresh search" must really ask again.
-export function forgetSearches() { memos = new WeakMap(); }
+const MEMO_MS = 600000; let memos = new WeakMap(), freshSearch = false;
+// "Run fresh search" must really ask again: the memory is dropped and, until endFreshSearch(), SerpApi is told not to
+// serve its own cached copy of Google's answer (a fresh Google fetch, which costs a credit even for a repeated query).
+export function beginFreshSearch() { memos = new WeakMap(); freshSearch = true; }
+export function endFreshSearch() { freshSearch = false; }
 async function remembered(fetcher, key, produce) {
   let memo = memos.get(fetcher); if (!memo) memos.set(fetcher, memo = new Map());
   const hit = memo.get(key); if (hit && Date.now() - hit.at < MEMO_MS) return hit.rows;

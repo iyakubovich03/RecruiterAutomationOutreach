@@ -8,7 +8,7 @@ export function outreachBlocked(history, id, to, multipleCandidates = false) {
  return history.some(h => (h.to === to && ['sent','pending','uncertain','bounced'].includes(h.status)) || (h.contactId === id && (['pending','uncertain'].includes(h.status) || (!multipleCandidates && h.status === 'sent'))));
 }
 export function buildBatch(recipients,contacts,history,from,subject,message,multipleCandidates=false) {
- if(!Array.isArray(recipients)||recipients.length<1||recipients.length>8)throw new Error('Choose between 1 and 8 recipients.');
+ if(!Array.isArray(recipients)||recipients.length<1||recipients.length>24)throw new Error('Choose between 1 and 24 recipients.');
  const seen=new Set(),ids=new Set();
  return recipients.map(({id,to})=>{
    const c=contacts.find(c=>c.id===id);if(!c||!c.candidates.some(e=>e.email===to))throw new Error('Choose an available email candidate for each recruiter.');

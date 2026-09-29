@@ -48,6 +48,9 @@ test('a custom config changes the search query, filters, ranking, and template',
 test('invalid config files fail with a clear message', () => {
   assert.throws(() => normalizeConfig({ focusTiers: [{ label: 'Bad', any: ['('] }] }), /focusTiers\[0\]\.any contains an invalid regular expression/);
   assert.throws(() => normalizeConfig({ search: { roleKeyword: 'a"b' } }), /roleKeyword/);
+  assert.deepEqual(normalizeConfig({}).search.moreKeywords, ['talent acquisition', 'technical recruiter', 'university recruiter']);
+  assert.throws(() => normalizeConfig({ search: { moreKeywords: ['a"b'] } }), /moreKeywords/);
+  assert.equal(normalizeConfig({ search: { moreKeywords: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] } }).search.moreKeywords.length, 6);
   assert.throws(() => normalizeConfig({ recruiterTerms: [] }), /recruiterTerms/);
   assert.throws(() => normalizeConfig({ template: { subject: 'two\nlines' } }), /single line/);
   const dir = mkdtempSync(join(tmpdir(), 'cfg-')); writeFileSync(join(dir, 'search.config.json'), '{ not json');

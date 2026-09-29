@@ -37,7 +37,7 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
   const [edits, setEdits] = useState<Record<string, Draft>>({});
   const unsaved = Object.keys(edits).length > 0;
   const recipients = automaticRecipients(contacts, contactIds, history) as { contact: Contact; email: string; skipped: string }[];
-  const ready = recipients.filter(r => !r.skipped).slice(0, 8);
+  const ready = recipients.filter(r => !r.skipped).slice(0, 24);
 
   useEffect(() => {
     if (!runId || run) return;
@@ -169,7 +169,7 @@ export default function SendFlow({ mode, contactIds, runId = null, contacts, his
         {connected && <>
           <ul className="recipient-list">
             {recipients.map(r => <li key={r.contact.id + r.email} className={r.skipped ? 'skipped' : ''}><span><strong>{personLink(r.contact.name, r.contact.source)}</strong> · {r.contact.company}</span><span>{r.email || '—'}{r.skipped && <small> · {r.skipped}</small>}</span></li>)}
-            {recipients.filter(r => !r.skipped).length > 8 && <li className="skipped"><small>Only the first eight people are included in one run.</small></li>}
+            {recipients.filter(r => !r.skipped).length > 24 && <li className="skipped"><small>Only the first 24 people are included in one run.</small></li>}
           </ul>
           {!ready.length && <><p className="hint">Nobody left to email — everyone here was already contacted.</p><div className="cta-row"><button className="secondary" onClick={onClose}>Close</button></div></>}
           {ready.length > 0 && resumeLine}

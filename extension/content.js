@@ -155,23 +155,25 @@
     const events = progress?.events || []; const reached = Math.max(0, ...events.map(e => STEPS.findIndex(([, names]) => names.includes(e.stage))));
     panelShell(`Finding recruiters at ${company}`, h('div', { class: 'steps' }, STEPS.map(([label], i) => h('div', { class: 'step ' + (i < reached ? 'done' : i === reached ? 'active' : '') }, `${i < reached ? '✓' : i === reached ? '…' : '○'} ${label}`))), h('p', { class: 'hint' }, events.at(-1)?.detail || 'Starting search…'));
   }
-  async function runPreview(company, fresh = false) {
+  // `more` runs the extra role-keyword searches on the server and adds anyone new to the same result.
+  async function runPreview(company, fresh = false, more = false) {
     if (company.length < 2) return;
     state.company = company; state.busy = true;
     renderProgress(company, null);
     const timer = setInterval(async () => { const progress = await ask({ type: 'progress' }); if (state.busy && progress?.company === company) renderProgress(company, progress); }, 1500);
-    const result = await ask({ type: 'preview', company, fresh, siteHint: siteHint(), pageUrl: location.href.split('#')[0] });
+    const result = await ask({ type: 'preview', company, fresh, more, siteHint: siteHint(), pageUrl: location.href.split('#')[0] });
     clearInterval(timer); state.busy = false;
     if (result.error) return showSetup(result);
     showPreview(result);
   }
   function showPreview(result) {
     const { discovery, recipients, batch, reason } = result;
+    const moreButton = discovery.moreSearched ? null : h('button', { class: 'btn', title: 'Runs a few extra searches (talent acquisition, technical recruiter, …) and adds anyone new. Each search uses one search-API credit.', onclick: () => runPreview(discovery.company, false, true) }, 'Find more recruiters');
     const chips = h('div', {}, h('span', { class: 'chip', title: discovery.domainMessage || '' }, discovery.domain ? `Email domain · ${discovery.domain}` : 'Email domain not established'), discovery.formats ? h('span', { class: 'chip' }, `${discovery.formats} RocketReach formats · most common ${discovery.topFormat.format} (${discovery.topFormat.percentage}%)`) : h('span', { class: 'chip' }, 'No RocketReach formats · generic guesses'), discovery.domainMessage ? h('p', { class: 'hint' }, discovery.domainMessage) : null);
     const people = h('ul', {}, discovery.results.map(r => { const skip = recipients.find(x => x.name === r.name)?.skipped; return h('li', { class: skip ? 'skipped' : '' }, h('span', {}, h('strong', {}, personLink(r.name, r.source)), h('br'), h('span', { class: 'hint' }, r.title)), h('span', {}, r.candidates[0]?.email || '—', skip ? h('br') : null, skip ? h('span', { class: 'hint' }, skip) : null)); }));
     if (!batch) {
       const retry = h('input', { type: 'text', value: state.company, placeholder: 'Company name' });
-      return panelShell(`${discovery.results.length} recruiters at ${discovery.company}`, chips, people, h('div', { class: 'alert' }, reason), h('p', { class: 'hint' }, 'Tip: use the company’s everyday name (for example “Scale AI”, not “scaleai”). Every request is listed under Requests in the app.'), retry, h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => runPreview(retry.value.trim(), true) }, 'Search again →'), h('button', { class: 'btn', onclick: () => ask({ type: 'open-app' }) }, 'Open app ↗'), h('button', { class: 'btn', onclick: hide }, 'Close')));
+      return panelShell(`${discovery.results.length} recruiters at ${discovery.company}`, chips, people, h('div', { class: 'alert' }, reason), h('p', { class: 'hint' }, 'Tip: use the company’s everyday name (for example “Scale AI”, not “scaleai”). Every request is listed under Requests in the app.'), retry, h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => runPreview(retry.value.trim(), true) }, 'Search again →'), discovery.results.length ? moreButton : null, h('button', { class: 'btn', onclick: () => ask({ type: 'open-app' }) }, 'Open app ↗'), h('button', { class: 'btn', onclick: hide }, 'Close')));
     }
     const authorize = h('input', { type: 'checkbox' });
     const sendButton = h('button', { class: 'btn primary', disabled: '' , onclick: () => startRun(batch) }, 'Authorize & start the run ↗');
@@ -182,7 +184,7 @@
     const rows = editableRows(batch, updated => showPreview({ ...result, batch: updated }), flag => { rowsUnsaved = flag; syncSend(); });
     const first = batch.rows[0]?.name, verified = !!state.status?.bounceDetection;
     const plan = h('div', { class: 'alert', style: 'background:#f3f6ed;border-color:#d2e3c5;color:#3f5f44' }, verified ? `How this run works: ${first} is emailed first at the top-ranked format. If that bounces (usually within seconds; 60s at most), the next format is tried on ${first}. Once a format gets through, everyone else is emailed at it, and anyone who bounces is retried at their next address (up to 3 tries each). It keeps going even if you close this panel.` : 'Bounce detection is off, so everyone is emailed once at their top address. Reconnect Gmail in the app to enable format verification.');
-    panelShell(`Email ${batch.rows.length} recruiter${batch.rows.length === 1 ? '' : 's'} at ${discovery.company}`, h('div', { class: 'eyebrow' }, 'STEP 2 · REVIEW, EDIT AND AUTHORIZE'), chips, people, plan, h('p', { class: 'hint' }, `Each recruiter gets a separate email with ${batch.attachment} attached. Change the text for everyone below, or expand a row to change one person's email; save edits before authorizing.`), result.savedDefault ? h('p', { class: 'hint ok' }, '✓ Saved as your default email for future companies.') : null, bulk, rows, h('label', { class: 'confirm' }, authorize, `I authorize this run: up to ${batch.rows.length} recruiters, up to 3 addresses each, with ${batch.attachment} attached. The addresses are best guesses and are not verified.`), h('div', { class: 'row' }, sendButton, h('button', { class: 'btn', onclick: hide }, 'Cancel')));
+    panelShell(`Email ${batch.rows.length} recruiter${batch.rows.length === 1 ? '' : 's'} at ${discovery.company}`, h('div', { class: 'eyebrow' }, 'STEP 2 · REVIEW, EDIT AND AUTHORIZE'), chips, people, plan, h('p', { class: 'hint' }, `Each recruiter gets a separate email with ${batch.attachment} attached. Change the text for everyone below, or expand a row to change one person's email; save edits before authorizing.`), result.savedDefault ? h('p', { class: 'hint ok' }, '✓ Saved as your default email for future companies.') : null, bulk, rows, h('label', { class: 'confirm' }, authorize, `I authorize this run: up to ${batch.rows.length} recruiters, up to 3 addresses each, with ${batch.attachment} attached. The addresses are best guesses and are not verified.`), h('div', { class: 'row' }, sendButton, moreButton, h('button', { class: 'btn', onclick: hide }, 'Cancel')));
   }
   // ---------- verified run (server-owned; closing the panel never stops it) ----------
   let runTimer = null;

@@ -76,6 +76,20 @@ test('company matching ignores spacing and the search retries unquoted when the 
  assert.equal(result.results[0].observedCompany,'Scale AI');assert.equal(result.canonicalCompany,'Scale AI');assert.equal(result.company,'Scaleai');
  assert.equal(queries.filter(q=>q.includes('duckduckgo')).length,3);assert.match(queries.at(-1),/site:linkedin\.com Scaleai recruiter/);
 });
+test('extra keywords run one ladder each, merge by profile, skip people already found, and respect the limit',async()=>{
+ const result=(name,slug)=>`<div class="result"><a class="result__a" href="https://www.linkedin.com/in/${slug}">${name} - Recruiter at Example | LinkedIn</a></div>`;
+ const queries=[];
+ const fetcher=async url=>{const q=decodeURIComponent(String(url));if(!q.includes('duckduckgo'))return new Response('Blocked',{status:403});queries.push(q);
+  if(q.includes('talent acquisition'))return new Response(result('Jane Smith','jane-smith')+result('Alex Chen','alex-chen'));
+  if(q.includes('technical recruiter'))return new Response(result('Alex Chen','alex-chen')+result('Sam Lee','sam-lee')+result('Kim Park','kim-park'));
+  return new Response('<div class="result"></div>');};
+ const more=await discoverRecruiters('Example','',fetcher,()=>{},{keywords:['talent acquisition','technical recruiter'],exclude:['https://www.linkedin.com/in/jane-smith'],limit:2});
+ assert.deepEqual(more.results.map(r=>r.name),['Alex Chen','Sam Lee']);
+ assert.equal(queries.filter(q=>q.includes('talent acquisition')).length,1,'a keyword that finds people stops its ladder');
+ assert.equal(queries.filter(q=>q.includes('technical recruiter')).length,1);
+ const none=await discoverRecruiters('Example','',fetcher,()=>{},{keywords:['campus hiring'],limit:8});
+ assert.equal(none.results.length,0);assert.equal(queries.filter(q=>q.includes('campus hiring')).length,2,'an extra keyword that finds nobody stops after the quoted forms');
+});
 test('company names containing regular expression characters match literally',()=>{
  assert.ok(rankProfile({headline:'Jane Smith - Recruiter at Example (US)',snippet:''},'Example (US)'));
  assert.equal(rankProfile({headline:'Jane Smith - Recruiter at Example US',snippet:''},'Example (US)'),null);

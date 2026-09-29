@@ -7,7 +7,8 @@
   "search": {
     "roleKeyword": "recruiter",
     "audience": "University, early-career, and technical recruiters.",
-    "exampleCompanies": ["Stripe", "Microsoft", "Datadog"]
+    "exampleCompanies": ["Stripe", "Microsoft", "Datadog"],
+    "moreKeywords": ["talent acquisition", "technical recruiter", "university recruiter"]
   },
   "recruiterTerms": ["recruit\\w*", "talent acquisition", "early careers", "campus hiring", "university relations"],
   "focusTiers": [

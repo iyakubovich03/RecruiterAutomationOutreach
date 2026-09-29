@@ -471,6 +471,30 @@ test('any email in a draft batch can be rewritten before authorizing, and the ed
  assert.equal((await h.call('batch/update',{batchId:batch.id,rows:[{id:jane.id,to:jane.to,message:'too late'}]})).status,409);
  const history=(await h.call('status')).body.history;assert.equal(history.find(r=>r.to===jane.to).message,'Hi Jane,\nI rewrote this one by hand.');
 });
+test('find more recruiters adds people from the extra keyword searches without redoing domain or format research',async t=>{
+ const profile=(name,slug)=>`<div class="result"><a class="result__a" href="https://www.linkedin.com/in/${slug}">${name} - Recruiter at Example | LinkedIn</a><div class="result__snippet">Recruiter at Example</div></div>`;
+ t.mock.method(globalThis,'fetch',async url=>{const u=decodeURIComponent(String(url));if(!u.includes('duckduckgo.com/html'))return new Response('Blocked',{status:403});
+  if(u.includes('talent acquisition'))return new Response(profile('Jane Smith','jane-smith')+profile('Alex Chen','alex-chen'));
+  if(u.includes('technical recruiter')||u.includes('university recruiter'))return new Response('<div class="result"></div>');
+  return new Response(profile('Jane Smith','jane-smith'));});
+ const data=batchSeed();data.template={subject:'Roles at {company}',message:'Hi {first_name}'};data.resume={filename:'r.pdf',type:'application/pdf',size:5,savedAt:'2026-09-17T00:00:00.000Z'};
+ let domainLookups=0,patternLookups=0;
+ const h=harness(data,{discoverCompanyDomain:async()=>{domainLookups++;return {domain:'example.com',status:'published',sources:[],message:'Published'};},findPatterns:async domain=>{patternLookups++;return {domain,checkedAt:new Date().toISOString(),reportedPatterns:[{format:'first.last',percentage:70,source:'https://rocketreach.co/example-email-format_1'}],sources:[],warnings:[]};},findRocketReachCompany:async()=>null});
+ writeFileSync(join(h.dir,'resume.bin'),'%PDF-1.7');
+ const ext={'x-extension-token':(await h.call('status')).body.extensionToken};
+ const first=await h.call('extension/preview',{company:'Example'},ext);
+ assert.equal(first.status,200,JSON.stringify(first.body));assert.equal(first.body.discovery.results.length,1);assert.equal(first.body.discovery.moreSearched,null);
+ const more=await h.call('extension/preview',{company:'Example',more:true},ext);
+ assert.equal(more.status,200,JSON.stringify(more.body));
+ assert.deepEqual(more.body.discovery.results.map(r=>r.name),['Jane Smith','Alex Chen']);
+ assert.deepEqual(more.body.discovery.moreSearched,['talent acquisition','technical recruiter','university recruiter']);
+ assert.equal(more.body.discovery.results[1].candidates[0].email,'alex.chen@example.com','new people get addresses from the formats already researched');
+ assert.equal(domainLookups,1);assert.equal(patternLookups,1);
+ assert.deepEqual(more.body.batch.rows.map(r=>r.to).sort(),['alex.chen@example.com','jane.smith@example.com']);
+ // The web session sees the same extended result, and asking again does not search again.
+ const web=await h.call('discover',{company:'Example',more:true});
+ assert.equal(web.status,200);assert.equal(web.body.results.length,2);assert.ok(web.body.diagnostics.events.some(e=>/more recruiter/.test(e.detail)));
+});
 test('extension batches are edited through the extension route only',async t=>{
  const messages=[];
  t.mock.method(globalThis,'fetch',async(url,opts)=>{const u=String(url);if(u.includes('duckduckgo.com/html'))return new Response('<div class="result"><a class="result__a" href="https://www.linkedin.com/in/jane-smith">Jane Smith - University Recruiter at Example | LinkedIn</a><div class="result__snippet">Recruiter at Example</div></div>');if(u.includes('gmail/v1/users/me/messages/send')){messages.push(Buffer.from(JSON.parse(opts.body).raw,'base64url').toString());return Response.json({id:'gmail-1'});}return new Response('Blocked',{status:403});});

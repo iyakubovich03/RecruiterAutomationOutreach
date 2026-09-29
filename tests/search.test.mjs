@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchWeb, parseSearchHtml, apiProviders } from '../server/search.mjs';
+import { searchWeb, parseSearchHtml, apiProviders, beginFreshSearch, endFreshSearch } from '../server/search.mjs';
 test('keyed providers are only enabled when their credentials exist',()=>{
  assert.deepEqual(apiProviders({}),[]);
  assert.deepEqual(apiProviders({GOOGLE_CSE_KEY:'k'}).map(p=>p.name),[]);
@@ -10,6 +10,10 @@ test('SerpApi results are parsed and its in-body error is treated as a failure',
  const calls=[];
  const ok=await searchWeb('q',{env:{SERPAPI_KEY:'a'},fetcher:async url=>{calls.push(String(url));return Response.json({organic_results:[{link:'https://rocketreach.co/x-email-format_1',title:'X Email Format',snippet:'formats'}]});},read:async()=>{throw new Error('must not scrape');}});
  assert.equal(ok.provider,'SerpApi Google API');assert.equal(ok.rows[0].url,'https://rocketreach.co/x-email-format_1');assert.match(calls[0],/api_key=a/);assert.match(calls[0],/gl=us&hl=en&google_domain=google\.com/);
+ assert.doesNotMatch(calls[0],/no_cache/);
+ // A fresh search tells SerpApi not to serve its cached copy of Google's answer; ordinary searches accept the (free) cached copy.
+ beginFreshSearch();const freshCalls=[];await searchWeb('q',{env:{SERPAPI_KEY:'a'},fetcher:async url=>{freshCalls.push(String(url));return Response.json({organic_results:[{link:'https://rocketreach.co/x-email-format_1',title:'X'}]});},read:async()=>{throw new Error('must not scrape');}});endFreshSearch();
+ assert.match(freshCalls[0],/no_cache=true/);
  const events=[];const failed=await searchWeb('q',{env:{SERPAPI_KEY:'a'},fetcher:async()=>Response.json({error:'Invalid API key'}),read:async()=>'<html></html>',onEvent:e=>events.push(e)});
  assert.equal(failed.provider,'');assert.ok(events.some(e=>e.status==='error'&&/Invalid API key/.test(e.detail)));
  assert.ok(events.every(e=>!String(e.source||'').includes('api_key')));

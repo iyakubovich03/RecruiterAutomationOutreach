@@ -4,7 +4,7 @@ import { discoverCompanyDomain, excludedHost, freemailHost, looksLikeCompanySite
 import { findPatterns, rankCandidates } from './patterns.mjs';
 import { discoverRecruiters } from './discovery.mjs';
 import { findRocketReachCompany } from './rocketreach.mjs';
-import { apiProviders, searchWeb, forgetSearches } from './search.mjs';
+import { apiProviders, searchWeb, beginFreshSearch, endFreshSearch } from './search.mjs';
 import { searchConfig, publicConfig } from './config.mjs';
 import { parseProfileHtml } from './profile.mjs';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
@@ -72,9 +72,15 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
   const extensionSession = { csrf: '', created: Date.now() };
   let extensionDebug = null, lastDebug = null, lastDiscovery = null;
   const publicBatch = batch => { const copy = { ...batch }; delete copy.owner; return copy; };
-  async function runDiscovery(company, { domain = '', fresh = false, onDebug = () => {}, domainHint = '', pageUrl = '' } = {}) {
+  // A search returns at most this many recruiters in total (a first search finds up to 8; "Find more recruiters" adds to it).
+  const MAX_RECRUITERS = 24;
+  async function runDiscovery(company, { domain = '', fresh = false, more = false, onDebug = () => {}, domainHint = '', pageUrl = '' } = {}) {
     const key=company.toLowerCase()+'|'+domain, cached=discoveryCache.get(key);
-    if(fresh)forgetSearches();
+    if(more){
+      const base=!fresh&&cached&&Date.now()-cached.time<600000?cached.result:!fresh&&lastDiscovery&&String(lastDiscovery.company||'').toLowerCase()===company.toLowerCase()?lastDiscovery:null;
+      return extendDiscovery(key,base||await runDiscovery(company,{domain,fresh,onDebug,domainHint,pageUrl}),onDebug);
+    }
+    if(fresh)beginFreshSearch();
     if(discovering)throw fail('A company search is already running. Please wait.',409);
     const debug={company,running:true,startedAt:new Date().toISOString(),events:[]};onDebug(debug);lastDebug=debug;
     const trace=event=>{if(debug.events.length<120)debug.events.push({...event,detail:String(event.detail||'').slice(0,1000),at:new Date().toISOString()});};
@@ -204,6 +210,28 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       debug.running=false;result.diagnostics=debug;
       discoveryCache.set(key,{time:Date.now(),result});if(discoveryCache.size>20)discoveryCache.delete(discoveryCache.keys().next().value);
       lastDiscovery=result;return result;
+    } finally{discovering=false;debug.running=false;endFreshSearch();}
+  }
+  // "Find more recruiters": one extra query ladder per configured keyword, adding only people not already in the result.
+  // The domain and RocketReach formats already established are reused, so the only cost is the extra searches.
+  async function extendDiscovery(key, base, onDebug) {
+    if(discovering)throw fail('A company search is already running. Please wait.',409);
+    const debug={company:base.company,running:true,startedAt:new Date().toISOString(),events:[...(base.diagnostics?.events||[])]};onDebug(debug);lastDebug=debug;
+    const trace=event=>{if(debug.events.length<240)debug.events.push({...event,detail:String(event.detail||'').slice(0,1000),at:new Date().toISOString()});};
+    discovering=true;
+    try{
+      const env=getEnv(),keywords=searchConfig.search.moreKeywords,displayCompany=base.canonicalCompany||base.company,room=MAX_RECRUITERS-base.results.length;
+      trace({stage:'Search',status:'running',detail:`Looking for more recruiters at ${displayCompany}: ${keywords.map(k=>`“${k}”`).join(', ')} (one search each, ${room} more at most).`});
+      let extra={results:[],warnings:[]};
+      if(room>0)try{extra=await discoverRecruiters(displayCompany,'',fetch,trace,{env,keywords,exclude:base.results.map(r=>r.source),limit:room});}
+      catch(e){trace({stage:'Recruiter discovery',status:'error',detail:e.message});extra={results:[],warnings:[e.message]};}
+      const domain=base.domain,report=domain?db.patterns[domain]:null;
+      const added=extra.results.map(row=>({...row,candidates:domain?rankCandidates(row.name,domain,row.sourceText,report):[]}));
+      for(const row of added)trace({stage:'Email candidates',status:domain?'ok':'empty',detail:domain?`${row.name}: ${row.candidates.map(c=>`${c.email} [${c.format}]`).join(', ')}. All unverified.`:`${row.name}: no company domain established.`,source:row.source});
+      trace({stage:'Search',status:added.length?'ok':'partial',detail:`Finished: ${added.length} more recruiter${added.length===1?'':'s'} found (${base.results.length+added.length} in total).`});
+      const result={...base,results:[...base.results,...added],warnings:[...new Set([...(base.warnings||[]),...(extra.warnings||[])])],searchedAt:new Date().toISOString(),moreSearched:keywords};
+      debug.running=false;result.diagnostics=debug;
+      discoveryCache.set(key,{time:Date.now(),result});lastDiscovery=result;return result;
     } finally{discovering=false;debug.running=false;}
   }
   // What actually happened to each RocketReach format at this domain: emails that stuck versus bounces, from the outreach history.
@@ -220,7 +248,7 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
     return stats;
   }
   function saveContacts(search, domain, sources) {
-    if(!Array.isArray(sources)||!sources.length||sources.length>8)throw fail('Select 1–8 profiles to save.');
+    if(!Array.isArray(sources)||!sources.length||sources.length>MAX_RECRUITERS)throw fail(`Select 1–${MAX_RECRUITERS} profiles to save.`);
     const selected=search.results.filter(row=>sources.includes(row.source));
     if(selected.length!==new Set(sources).size)throw fail('Only profiles from your search can be saved.');
     const contacts=[],contactIds=[];let refreshed=0;
@@ -647,13 +675,13 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
         if(!db.tokens)throw fail('Connect Gmail in the Recruiter Outreach app first.',401);
         if(!db.template.subject?.trim()||!db.template.message?.trim())throw fail('Set a default email in the Recruiter Outreach app first.');
         loadResume();
-        const result=await runDiscovery(company,{fresh:body.fresh===true,onDebug:d=>{extensionDebug=d;},domainHint:String(body.siteHint||'').trim().slice(0,100),pageUrl:String(body.pageUrl||'').slice(0,500)});
-        const discovery={company:result.company,domain:result.domain,domainMessage:result.domainResolution?.message||'',provider:result.provider,warnings:result.warnings,formats:result.patternReport?.reportedPatterns?.length||0,topFormat:result.patternReport?.reportedPatterns?.[0]?{format:result.patternReport.reportedPatterns[0].format,percentage:result.patternReport.reportedPatterns[0].percentage}:null,results:result.results.map(r=>({name:r.name,title:r.title,focus:r.focus,source:r.source,candidates:r.candidates.map(c=>({email:c.email,format:c.format,percentage:c.percentage??null}))}))};
+        const result=await runDiscovery(company,{fresh:body.fresh===true,more:body.more===true,onDebug:d=>{extensionDebug=d;},domainHint:String(body.siteHint||'').trim().slice(0,100),pageUrl:String(body.pageUrl||'').slice(0,500)});
+        const discovery={company:result.company,domain:result.domain,domainMessage:result.domainResolution?.message||'',provider:result.provider,moreSearched:result.moreSearched||null,warnings:result.warnings,formats:result.patternReport?.reportedPatterns?.length||0,topFormat:result.patternReport?.reportedPatterns?.[0]?{format:result.patternReport.reportedPatterns[0].format,percentage:result.patternReport.reportedPatterns[0].percentage}:null,results:result.results.map(r=>({name:r.name,title:r.title,focus:r.focus,source:r.source,candidates:r.candidates.map(c=>({email:c.email,format:c.format,percentage:c.percentage??null}))}))};
         if(!result.results.length)return json({discovery,recipients:[],batch:null,reason:'No recruiters were found for this company. Check the Requests tab in the app.'});
         if(!result.domain)return json({discovery,recipients:[],batch:null,reason:result.domainResolution?.message||'The company email domain could not be established.'});
         const {contactIds}=saveContacts(result,result.domain,result.results.map(r=>r.source));
         const recipients=automaticRecipients(db.contacts,contactIds,db.history);
-        const ready=recipients.filter(r=>!r.skipped).slice(0,8);
+        const ready=recipients.filter(r=>!r.skipped).slice(0,MAX_RECRUITERS);
         const rows=recipients.map(r=>({name:r.contact.name,company:r.contact.company,email:r.email,skipped:r.skipped}));
         if(!ready.length)return json({discovery,recipients:rows,batch:null,reason:'Everyone found here was already contacted.'});
         const batch=prepareBatch('extension',{recipients:ready.map(r=>({id:r.contact.id,to:r.email})),subject:db.template.subject,message:db.template.message,attachResume:true});
@@ -723,7 +751,7 @@ export function createLocalApi(getEnv, directory = join(process.cwd(), '.local-d
       }
       if (path === '/api/discover' && req.method === 'POST') {
         const company=String(body.company || '').trim(), domain=body.domain?domainOf(body.domain):'';
-        const result=await runDiscovery(company,{domain,fresh:body.fresh===true,onDebug:d=>{session.searchDebug=d;}});
+        const result=await runDiscovery(company,{domain,fresh:body.fresh===true,more:body.more===true,onDebug:d=>{session.searchDebug=d;}});
         session.discovery=result;return json(result);
       }
       if (path === '/api/discover/save' && req.method === 'POST') {

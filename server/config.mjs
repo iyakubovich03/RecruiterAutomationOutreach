@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 export const DEFAULT_CONFIG = Object.freeze({
   workspace: { label: 'Your job search', focus: 'Recruiter outreach' },
-  search: { roleKeyword: 'recruiter', audience: 'Recruiters at the companies on your list.', exampleCompanies: ['Stripe', 'Microsoft', 'Datadog'] },
+  search: { roleKeyword: 'recruiter', audience: 'Recruiters at the companies on your list.', exampleCompanies: ['Stripe', 'Microsoft', 'Datadog'], moreKeywords: ['talent acquisition', 'technical recruiter', 'university recruiter'] },
   recruiterTerms: ['recruit\\w*', 'talent acquisition'],
   focusTiers: [],
   fallbackFocus: 'Review recruiting focus',
@@ -36,7 +36,10 @@ export function normalizeConfig(raw = {}) {
   const workspace = { label: text(raw.workspace?.label, d.workspace.label, 'workspace.label'), focus: text(raw.workspace?.focus, d.workspace.focus, 'workspace.focus') };
   const roleKeyword = text(raw.search?.roleKeyword, d.search.roleKeyword, 'search.roleKeyword', 60);
   if (/["\r\n]/.test(roleKeyword)) fail('search.roleKeyword must not contain quotes or line breaks.');
-  const search = { roleKeyword, audience: text(raw.search?.audience, d.search.audience, 'search.audience'), exampleCompanies: list(raw.search?.exampleCompanies, d.search.exampleCompanies, 'search.exampleCompanies').slice(0, 5) };
+  // Extra role phrases that "Find more recruiters" searches, one search each; Google returns at most ~10 profiles per query.
+  const moreKeywords = list(raw.search?.moreKeywords, d.search.moreKeywords, 'search.moreKeywords').slice(0, 6);
+  if (moreKeywords.some(k => /["\r\n]/.test(k) || k.length > 60)) fail('search.moreKeywords entries must be at most 60 characters with no quotes or line breaks.');
+  const search = { roleKeyword, audience: text(raw.search?.audience, d.search.audience, 'search.audience'), exampleCompanies: list(raw.search?.exampleCompanies, d.search.exampleCompanies, 'search.exampleCompanies').slice(0, 5), moreKeywords };
   const recruiterTerms = list(raw.recruiterTerms, d.recruiterTerms, 'recruiterTerms');
   if (!recruiterTerms.length) fail('recruiterTerms needs at least one term.');
   const tiersRaw = raw.focusTiers === undefined ? d.focusTiers : raw.focusTiers;
